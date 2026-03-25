@@ -16,6 +16,7 @@ export default defineConfig({
 
   // HTTPS + Cross-Origin Isolation headers for SharedArrayBuffer + WebGPU
   server: {
+    host: '0.0.0.0', // Allow access from other machines (e.g. Tailscale)
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
