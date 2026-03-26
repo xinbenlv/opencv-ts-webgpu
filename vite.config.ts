@@ -39,4 +39,8 @@ export default defineConfig({
 
   // WGSL files imported as raw strings
   assetsInclude: ['**/*.wgsl'],
+
+  optimizeDeps: {
+    exclude: ['onnxruntime-web'],
+  },
 });

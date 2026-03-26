@@ -9,4 +9,4 @@ src/backends/wasm/pkg/
 .env.*
 /tmp/
 *.log
-demo/public/ort-*.wasm
+demo/public/ort-*
