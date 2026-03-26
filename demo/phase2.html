@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>JOSH Phase 2 — SE3 / Chunk / Cache Demo</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0a0a0a;
+    --surface: #111;
+    --border:  #222;
+    --text:    #e4e4e4;
+    --muted:   #888;
+    --accent:  #4ade80;
+    --blue:    #60a5fa;
+    --red:     #f87171;
+    --yellow:  #fbbf24;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  h1 { font-size: 1.4rem; font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+  .subtitle { color: var(--muted); margin-bottom: 20px; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 0; }
+  .tab-btn {
+    padding: 8px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    transition: color 0.15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-color: var(--accent); background: #0d1a0d; }
+
+  .tab-panel {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0 6px 6px 6px;
+    padding: 20px;
+  }
+  .tab-panel.active { display: block; }
+
+  /* Canvas */
+  canvas {
+    display: block;
+    background: #0d0d0d;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  /* Controls */
+  .controls { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  label { color: var(--muted); font-size: 12px; }
+  input[type=range] {
+    -webkit-appearance: none;
+    width: 220px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    outline: none;
+    cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+  .t-label { color: var(--accent); font-family: monospace; min-width: 60px; }
+
+  button {
+    padding: 6px 16px;
+    background: #1a2e1a;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+  }
+  button:hover { background: #2a3e2a; }
+  button.danger {
+    background: #2e1a1a;
+    border-color: var(--red);
+    color: var(--red);
+  }
+  button.danger:hover { background: #3e2a2a; }
+
+  .desc { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.5; }
+
+  /* Cache tab */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+  }
+  th, td {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-family: monospace;
+  }
+  th { background: #161616; color: var(--muted); font-weight: 500; text-align: left; }
+  td { color: var(--text); }
+  tr:hover td { background: #161616; }
+
+  .status-box {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: #0d0d0d;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+    min-height: 40px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .status-box.ok   { border-color: var(--accent); color: var(--accent); }
+  .status-box.err  { border-color: var(--red);    color: var(--red); }
+  .status-box.info { border-color: var(--yellow);  color: var(--yellow); }
+</style>
+</head>
+<body>
+
+<h1>JOSH Phase 2 — Utility Demos</h1>
+<p class="subtitle">SE3 Interpolation &nbsp;·&nbsp; Chunk Concatenation &nbsp;·&nbsp; Result Cache</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showTab('se3')">SE3 Interpolation</button>
+  <button class="tab-btn"        onclick="showTab('chunk')">Chunk Concatenation</button>
+  <button class="tab-btn"        onclick="showTab('cache')">Result Cache</button>
+</div>
+
+<!-- =====================================================================
+     TAB 1 — SE3 Interpolation
+     ===================================================================== -->
+<div id="tab-se3" class="tab-panel active">
+  <canvas id="se3-canvas" width="400" height="300"></canvas>
+  <div class="controls">
+    <label for="se3-slider">Interpolation t</label>
+    <input type="range" id="se3-slider" min="0" max="100" value="0" />
+    <span class="t-label" id="se3-t-label">t = 0.00</span>
+  </div>
+  <p class="desc">
+    Blue figure = pose A &nbsp;|&nbsp; Red figure = pose B &nbsp;|&nbsp;
+    <span style="color:var(--accent)">Green figure</span> = interpolated pose at t.<br>
+    Rotation uses SLERP; translation uses linear interpolation.
+  </p>
+</div>
+
+<!-- =====================================================================
+     TAB 2 — Chunk Concatenation
+     ===================================================================== -->
+<div id="tab-chunk" class="tab-panel">
+  <canvas id="chunk-canvas" width="400" height="300"></canvas>
+  <div class="controls">
+    <button id="concat-btn">Concatenate</button>
+    <span style="color:var(--muted);font-size:12px;">Blue = chunk 1 &nbsp;|&nbsp; Red = chunk 2 (local) &nbsp;|&nbsp; <span style="color:var(--accent)">Green = concatenated world</span></span>
+  </div>
+  <p class="desc">
+    chunk1 is a curve of 5 camera poses in world space.<br>
+    chunk2 is a local curve of 5 poses. Pressing <em>Concatenate</em> anchors chunk2 to the
+    last pose of chunk1, transforming it into world coordinates.
+  </p>
+</div>
+
+<!-- =====================================================================
+     TAB 3 — Result Cache
+     ===================================================================== -->
+<div id="tab-cache" class="tab-panel">
+  <table>
+    <thead>
+      <tr>
+        <th>Frame</th><th>Timestamp (s)</th><th>Loss[0]</th><th>Loss[1]</th>
+        <th>Loss[2]</th><th>Loss[3]</th><th>Loss[4]</th><th>Loss[5]</th>
+      </tr>
+    </thead>
+    <tbody id="cache-table-body"></tbody>
+  </table>
+  <div class="controls">
+    <button id="store-btn">Store to IndexedDB</button>
+    <button id="load-btn">Load Frame 2</button>
+    <button class="danger" id="clear-btn">Clear</button>
+  </div>
+  <div class="status-box" id="cache-status">Ready.</div>
+  <p class="desc">
+    If IndexedDB is unavailable (e.g. file:// without a server), a note will appear below.
+  </p>
+</div>
+
+<!-- =====================================================================
+     Inline JavaScript — pure math, no import maps needed
+     ===================================================================== -->
+<script>
+'use strict';
+
+// -------------------------------------------------------------------------
+// Tab switching
+// -------------------------------------------------------------------------
+function showTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    b.classList.toggle('active', ['se3','chunk','cache'][i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'tab-' + name);
+  });
+  if (name === 'se3') drawSE3(currentT);
+  if (name === 'chunk') drawChunk(false);
+  if (name === 'cache') renderCacheTable();
+}
+
+// =========================================================================
+// Mini SE3 math (inline, no modules)
+// =========================================================================
+
+function mat3ToQuat(m) {
+  const trace = m[0] + m[4] + m[8];
+  let x, y, z, w;
+  if (trace > 0) {
+    const s = 0.5 / Math.sqrt(trace + 1);
+    w = 0.25 / s; x = (m[7]-m[5])*s; y = (m[2]-m[6])*s; z = (m[3]-m[1])*s;
+  } else if (m[0] > m[4] && m[0] > m[8]) {
+    const s = 2*Math.sqrt(1+m[0]-m[4]-m[8]);
+    w = (m[7]-m[5])/s; x = s/4; y = (m[1]+m[3])/s; z = (m[2]+m[6])/s;
+  } else if (m[4] > m[8]) {
+    const s = 2*Math.sqrt(1+m[4]-m[0]-m[8]);
+    w = (m[2]-m[6])/s; x = (m[1]+m[3])/s; y = s/4; z = (m[5]+m[7])/s;
+  } else {
+    const s = 2*Math.sqrt(1+m[8]-m[0]-m[4]);
+    w = (m[3]-m[1])/s; x = (m[2]+m[6])/s; y = (m[5]+m[7])/s; z = s/4;
+  }
+  return [x, y, z, w];
+}
+
+function quatToMat3(q) {
+  const [x,y,z,w] = q;
+  const x2=x+x,y2=y+y,z2=z+z;
+  const xx=x*x2,xy=x*y2,xz=x*z2,yy=y*y2,yz=y*z2,zz=z*z2,wx=w*x2,wy=w*y2,wz=w*z2;
+  return [1-(yy+zz),xy-wz,xz+wy, xy+wz,1-(xx+zz),yz-wx, xz-wy,yz+wx,1-(xx+yy)];
+}
+
+function normalizeQuat(q) {
+  const [x,y,z,w] = q;
+  const l = Math.sqrt(x*x+y*y+z*z+w*w);
+  if (l < 1e-10) return [0,0,0,1];
+  return [x/l,y/l,z/l,w/l];
+}
+
+function slerpQuat(q0, q1in, t) {
+  let [x1,y1,z1,w1] = q1in;
+  const dot = q0[0]*x1 + q0[1]*y1 + q0[2]*z1 + q0[3]*w1;
+  if (dot < 0) { x1=-x1; y1=-y1; z1=-z1; w1=-w1; }
+  const cd = Math.min(1, Math.max(-1, Math.abs(dot)));
+  const angle = Math.acos(cd);
+  if (angle < 1e-6) {
+    return normalizeQuat([
+      q0[0]+t*(x1-q0[0]), q0[1]+t*(y1-q0[1]),
+      q0[2]+t*(z1-q0[2]), q0[3]+t*(w1-q0[3])
+    ]);
+  }
+  const sinA = Math.sin(angle);
+  const s0 = Math.sin((1-t)*angle)/sinA, s1 = Math.sin(t*angle)/sinA;
+  return [s0*q0[0]+s1*x1, s0*q0[1]+s1*y1, s0*q0[2]+s1*z1, s0*q0[3]+s1*w1];
+}
+
+// Build row-major 3×3 from col-major 4×4 rotation block
+function extractRotation(T) {
+  return [T[0],T[4],T[8], T[1],T[5],T[9], T[2],T[6],T[10]];
+}
+
+function buildSE3(rot, tx, ty, tz) {
+  const T = new Float32Array(16);
+  T[0]=rot[0]; T[1]=rot[3]; T[2]=rot[6]; T[3]=0;
+  T[4]=rot[1]; T[5]=rot[4]; T[6]=rot[7]; T[7]=0;
+  T[8]=rot[2]; T[9]=rot[5]; T[10]=rot[8]; T[11]=0;
+  T[12]=tx; T[13]=ty; T[14]=tz; T[15]=1;
+  return T;
+}
+
+function interpolateSE3(T0, T1, t) {
+  const r0 = extractRotation(T0), r1 = extractRotation(T1);
+  const q0 = mat3ToQuat(r0), q1 = mat3ToQuat(r1);
+  const qt = slerpQuat(q0, q1, t);
+  const rt = quatToMat3(qt);
+  const tx = T0[12]+t*(T1[12]-T0[12]);
+  const ty = T0[13]+t*(T1[13]-T0[13]);
+  const tz = T0[14]+t*(T1[14]-T0[14]);
+  return buildSE3(rt, tx, ty, tz);
+}
+
+function mat4Multiply(a, b) {
+  const out = new Float32Array(16);
+  for (let col=0;col<4;col++) for (let row=0;row<4;row++) {
+    let sum=0; for (let k=0;k<4;k++) sum+=a[k*4+row]*b[col*4+k];
+    out[col*4+row]=sum;
+  }
+  return out;
+}
+
+// =========================================================================
+// TAB 1 — SE3 Interpolation drawing
+// =========================================================================
+
+const se3Canvas = document.getElementById('se3-canvas');
+const se3Ctx = se3Canvas.getContext('2d');
+
+// Pose A: left side, rotated -20°
+function makePoseA() {
+  const T = new Float32Array(16);
+  const a = -0.35;
+  const c = Math.cos(a), s = Math.sin(a);
+  T[0]=c; T[1]=s; T[4]=-s; T[5]=c; T[10]=1; T[15]=1;
+  T[12]=-90; T[13]=30; T[14]=0;
+  return T;
+}
+
+// Pose B: right side, rotated +30°
+function makePoseB() {
+  const T = new Float32Array(16);
+  const a = 0.52;
+  const c = Math.cos(a), s = Math.sin(a);
+  T[0]=c; T[1]=s; T[4]=-s; T[5]=c; T[10]=1; T[15]=1;
+  T[12]=90; T[13]=-20; T[14]=0;
+  return T;
+}
+
+const poseA = makePoseA();
+const poseB = makePoseB();
+
+// Simple 2D stick figure joints (body-local coords, 2D only, Z ignored)
+// Head, neck, shoulders, elbows, wrists, hips, knees, ankles
+const joints2D = {
+  head:    [0,  70],
+  neck:    [0,  50],
+  lShoulder: [-25, 40],
+  rShoulder: [ 25, 40],
+  lElbow:  [-40, 15],
+  rElbow:  [ 40, 15],
+  lWrist:  [-48, -8],
+  rWrist:  [ 48, -8],
+  hip:     [0,  15],
+  lHip:    [-18,  0],
+  rHip:    [ 18,  0],
+  lKnee:   [-20,-30],
+  rKnee:   [ 20,-30],
+  lAnkle:  [-22,-60],
+  rAnkle:  [ 22,-60],
+};
+
+const bones = [
+  ['head','neck'],['neck','lShoulder'],['neck','rShoulder'],
+  ['lShoulder','lElbow'],['lElbow','lWrist'],
+  ['rShoulder','rElbow'],['rElbow','rWrist'],
+  ['neck','hip'],['hip','lHip'],['hip','rHip'],
+  ['lHip','lKnee'],['lKnee','lAnkle'],
+  ['rHip','rKnee'],['rKnee','rAnkle'],
+];
+
+// Apply 4×4 SE3 (col-major) to a 2D joint point (use x,y only; z=0,w=1)
+function applyTransform2D(T, p) {
+  const x = T[0]*p[0] + T[4]*p[1] + T[12];
+  const y = T[1]*p[0] + T[5]*p[1] + T[13];
+  return [x, y];
+}
+
+// World→canvas mapping
+const cx = 200, cy = 150, scale2D = 1.4;
+function toCanvas(p) {
+  return [cx + p[0]*scale2D, cy - p[1]*scale2D];
+}
+
+function drawStickFigure(ctx, T, color, alpha=1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2;
+
+  const transformed = {};
+  for (const [k,v] of Object.entries(joints2D)) {
+    transformed[k] = toCanvas(applyTransform2D(T, v));
+  }
+
+  for (const [a,b] of bones) {
+    ctx.beginPath();
+    ctx.moveTo(...transformed[a]);
+    ctx.lineTo(...transformed[b]);
+    ctx.stroke();
+  }
+
+  // Head circle
+  const hc = transformed.head;
+  ctx.beginPath();
+  ctx.arc(hc[0], hc[1], 9*scale2D*0.5, 0, Math.PI*2);
+  ctx.stroke();
+
+  // Joints
+  for (const p of Object.values(transformed)) {
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 2.5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+let currentT = 0;
+
+function drawSE3(t) {
+  const ctx = se3Ctx;
+  ctx.clearRect(0, 0, 400, 300);
+
+  // Ghost A and B
+  drawStickFigure(ctx, poseA, '#3b82f6', 0.35);
+  drawStickFigure(ctx, poseB, '#ef4444', 0.35);
+
+  // Labels for A and B
+  ctx.save();
+  ctx.font = 'bold 13px sans-serif';
+  ctx.fillStyle = '#3b82f6'; ctx.globalAlpha = 0.6;
+  ctx.fillText('A', toCanvas(applyTransform2D(poseA, [0,90]))[0]-5, toCanvas(applyTransform2D(poseA, [0,90]))[1]);
+  ctx.fillStyle = '#ef4444';
+  ctx.fillText('B', toCanvas(applyTransform2D(poseB, [0,90]))[0]-5, toCanvas(applyTransform2D(poseB, [0,90]))[1]);
+  ctx.restore();
+
+  // Interpolated (green)
+  const Ti = interpolateSE3(poseA, poseB, t);
+  drawStickFigure(ctx, Ti, '#4ade80', 1.0);
+}
+
+const se3Slider = document.getElementById('se3-slider');
+const se3TLabel = document.getElementById('se3-t-label');
+se3Slider.addEventListener('input', () => {
+  currentT = se3Slider.value / 100;
+  se3TLabel.textContent = 't = ' + currentT.toFixed(2);
+  drawSE3(currentT);
+});
+drawSE3(0);
+
+// =========================================================================
+// TAB 2 — Chunk Concatenation
+// =========================================================================
+
+const chunkCanvas = document.getElementById('chunk-canvas');
+const chunkCtx = chunkCanvas.getContext('2d');
+
+// Generate 5 SE3 poses along a curve
+function makeCurve(offsetX, offsetY, curveAmp, startAngle) {
+  const poses = [];
+  for (let i = 0; i < 5; i++) {
+    const t = i / 4;
+    const tx = offsetX + t * 80;
+    const ty = offsetY + Math.sin(t * Math.PI) * curveAmp;
+    const angle = startAngle + t * 0.6;
+    const T = new Float32Array(16);
+    const c = Math.cos(angle), s = Math.sin(angle);
+    T[0]=c; T[1]=s; T[4]=-s; T[5]=c; T[10]=1; T[15]=1;
+    T[12]=tx; T[13]=ty; T[14]=0;
+    poses.push(T);
+  }
+  return poses;
+}
+
+// chunk1: world-space blue curve
+const chunk1 = makeCurve(-140, 20, 40, 0.1);
+// chunk2: local red curve (starts near origin)
+const chunk2Local = makeCurve(-50, -30, 35, -0.2);
+
+let concatDone = false;
+let chunk2World = null;
+
+const chunkCX = 200, chunkCY = 150, chunkScale = 1.2;
+function toCChunk(p) { return [chunkCX + p[0]*chunkScale, chunkCY - p[1]*chunkScale]; }
+
+function drawPoseDot(ctx, T, color, size=5) {
+  const p = toCChunk([T[12], T[13]]);
+  ctx.beginPath(); ctx.arc(p[0], p[1], size, 0, Math.PI*2);
+  ctx.fillStyle = color; ctx.fill();
+
+  // Draw a short orientation line
+  const dx = T[0], dy = T[1]; // first column of rotation (forward direction)
+  const ep = toCChunk([T[12]+dx*20, T[13]+dy*20]);
+  ctx.beginPath(); ctx.moveTo(p[0],p[1]); ctx.lineTo(ep[0],ep[1]);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+}
+
+function drawPath(ctx, poses, color) {
+  if (poses.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+  ctx.beginPath();
+  const p0 = toCChunk([poses[0][12], poses[0][13]]);
+  ctx.moveTo(p0[0], p0[1]);
+  for (let i=1;i<poses.length;i++) {
+    const p = toCChunk([poses[i][12], poses[i][13]]);
+    ctx.lineTo(p[0], p[1]);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawChunk(done) {
+  const ctx = chunkCtx;
+  ctx.clearRect(0, 0, 400, 300);
+
+  // Grid
+  ctx.save();
+  ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 1;
+  for (let x=0;x<=400;x+=40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,300); ctx.stroke(); }
+  for (let y=0;y<=300;y+=40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(400,y); ctx.stroke(); }
+  ctx.restore();
+
+  drawPath(ctx, chunk1, '#3b82f6');
+  for (const T of chunk1) drawPoseDot(ctx, T, '#3b82f6');
+
+  if (!done) {
+    // Draw chunk2 in local coords (offset for visibility)
+    drawPath(ctx, chunk2Local, '#ef4444');
+    for (const T of chunk2Local) drawPoseDot(ctx, T, '#ef4444');
+  } else {
+    // Draw concatenated result
+    const full = [...chunk1, ...chunk2World];
+    // Join point marker
+    const jp = toCChunk([chunk1[chunk1.length-1][12], chunk1[chunk1.length-1][13]]);
+    ctx.save();
+    ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(jp[0], jp[1], 9, 0, Math.PI*2); ctx.stroke();
+    ctx.restore();
+
+    drawPath(ctx, chunk2World, '#4ade80');
+    for (const T of chunk2World) drawPoseDot(ctx, T, '#4ade80');
+
+    // Labels
+    ctx.save();
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#3b82f6'; ctx.fillText('chunk 1', toCChunk([chunk1[0][12]-5, chunk1[0][13]+15])[0], toCChunk([chunk1[0][12]-5, chunk1[0][13]+15])[1]);
+    ctx.fillStyle = '#4ade80'; ctx.fillText('chunk 2 (world)', toCChunk([chunk2World[0][12]+5, chunk2World[0][13]+15])[0], toCChunk([chunk2World[0][12]+5, chunk2World[0][13]+15])[1]);
+    ctx.fillStyle = '#fbbf24'; ctx.fillText('join', jp[0]+10, jp[1]-5);
+    ctx.restore();
+  }
+}
+
+document.getElementById('concat-btn').addEventListener('click', () => {
+  if (!concatDone) {
+    // anchor = last of chunk1
+    const anchor = chunk1[chunk1.length - 1];
+    chunk2World = chunk2Local.map(pose => mat4Multiply(anchor, pose));
+    concatDone = true;
+    document.getElementById('concat-btn').textContent = 'Reset';
+  } else {
+    concatDone = false;
+    chunk2World = null;
+    document.getElementById('concat-btn').textContent = 'Concatenate';
+  }
+  drawChunk(concatDone);
+});
+
+drawChunk(false);
+
+// =========================================================================
+// TAB 3 — Result Cache
+// =========================================================================
+
+// Fake per-frame data
+const fakeFrames = Array.from({ length: 5 }, (_, i) => ({
+  frameIndex: i,
+  timestamp: i / 30,
+  smplPose: new Float32Array(72).fill(0),
+  smplShape: new Float32Array(10).fill(0),
+  cameraPose: new Float32Array(16).fill(0).map((_,j) => j===0||j===5||j===10||j===15?1:0),
+  depthScale: 1.0 + i * 0.05,
+  vertices: null,
+  jointPositions: new Float32Array(72).fill(0),
+  losses: new Float32Array([
+    0.12 + i*0.03, 0.08 + i*0.01, 0.15 - i*0.02,
+    0.05 + i*0.005, 0.09, 0.11 - i*0.01,
+  ]),
+}));
+
+function renderCacheTable() {
+  const tbody = document.getElementById('cache-table-body');
+  tbody.innerHTML = '';
+  for (const f of fakeFrames) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${f.frameIndex}</td>
+      <td>${f.timestamp.toFixed(4)}</td>
+      ${Array.from(f.losses).map(v=>`<td>${v.toFixed(4)}</td>`).join('')}
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function setStatus(msg, type='info') {
+  const el = document.getElementById('cache-status');
+  el.textContent = msg;
+  el.className = 'status-box ' + type;
+}
+
+const IDB_AVAILABLE = typeof indexedDB !== 'undefined';
+
+// Open / get IDB handle
+const DB_NAME = 'josh-results-demo-hash';
+const DB_VERSION = 1;
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('frames')) db.createObjectStore('frames', { keyPath: 'frameIndex' });
+      if (!db.objectStoreNames.contains('metadata')) db.createObjectStore('metadata', { keyPath: 'key' });
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+document.getElementById('store-btn').addEventListener('click', async () => {
+  if (!IDB_AVAILABLE) { setStatus('IndexedDB not available in this environment.', 'err'); return; }
+  try {
+    setStatus('Storing 5 frames…', 'info');
+    const db = await openDb();
+    const tx = db.transaction('frames', 'readwrite');
+    const store = tx.objectStore('frames');
+    for (const f of fakeFrames) {
+      await new Promise((res, rej) => { const r=store.put(f); r.onsuccess=res; r.onerror=rej; });
+    }
+    db.close();
+    setStatus('Stored 5 frames successfully.', 'ok');
+  } catch(e) {
+    setStatus('Error: ' + e.message, 'err');
+  }
+});
+
+document.getElementById('load-btn').addEventListener('click', async () => {
+  if (!IDB_AVAILABLE) { setStatus('IndexedDB not available in this environment.', 'err'); return; }
+  try {
+    const db = await openDb();
+    const tx = db.transaction('frames', 'readonly');
+    const store = tx.objectStore('frames');
+    const result = await new Promise((res, rej) => {
+      const r = store.get(2); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    db.close();
+    if (!result) {
+      setStatus('Frame 2 not found. Press "Store to IndexedDB" first.', 'info');
+    } else {
+      setStatus(
+        `Frame 2 loaded:\n` +
+        `  frameIndex: ${result.frameIndex}\n` +
+        `  timestamp:  ${result.timestamp.toFixed(4)} s\n` +
+        `  depthScale: ${result.depthScale.toFixed(4)}\n` +
+        `  losses:     [${Array.from(result.losses).map(v=>v.toFixed(4)).join(', ')}]`,
+        'ok'
+      );
+    }
+  } catch(e) {
+    setStatus('Error: ' + e.message, 'err');
+  }
+});
+
+document.getElementById('clear-btn').addEventListener('click', async () => {
+  if (!IDB_AVAILABLE) { setStatus('IndexedDB not available in this environment.', 'err'); return; }
+  try {
+    const db = await openDb();
+    const tx = db.transaction(['frames','metadata'], 'readwrite');
+    await new Promise((res,rej) => { const r=tx.objectStore('frames').clear(); r.onsuccess=res; r.onerror=rej; });
+    await new Promise((res,rej) => { const r=tx.objectStore('metadata').clear(); r.onsuccess=res; r.onerror=rej; });
+    db.close();
+    setStatus('Cache cleared.', 'ok');
+  } catch(e) {
+    setStatus('Error: ' + e.message, 'err');
+  }
+});
+
+if (!IDB_AVAILABLE) {
+  setStatus('IndexedDB is not available in this environment (SSR / Node not supported). Buttons are disabled.', 'err');
+}
+
+renderCacheTable();
+</script>
+</body>
+</html>
