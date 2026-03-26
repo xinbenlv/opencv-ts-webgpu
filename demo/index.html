@@ -85,7 +85,13 @@
     </header>
     <main>
       <div class="panel">
-        <div class="panel-header">Input — Camera Feed</div>
+        <div class="panel-header" style="display:flex;align-items:center;gap:0.5rem;">
+          Input —
+          <select id="inputSource" style="background:#222;color:#ccc;border:1px solid #444;border-radius:4px;padding:0.15rem 0.3rem;font-size:0.8rem;">
+            <option value="camera">Camera</option>
+            <option value="sample">JOSH Demo Video</option>
+          </select>
+        </div>
         <div class="panel-body">
           <video id="videoInput" autoplay muted playsinline></video>
           <span class="status" id="cameraStatus">Requesting camera...</span>

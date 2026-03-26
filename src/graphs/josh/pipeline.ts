@@ -1,9 +1,17 @@
 import { createGraphBuilder } from '../../graph/graph.ts';
 import type { NodeContext } from '../../graph/node.ts';
 import type { CompiledGraph } from '../../graph/compiler.ts';
+import type { NodeId } from '../../core/types.ts';
 import { DepthEstimationNode } from './nodes/depth-estimation.node.ts';
 import { HumanMeshRecoveryNode } from './nodes/human-mesh-recovery.node.ts';
 import { JoshSolverNode } from './nodes/josh-solver.node.ts';
+
+export interface JoshPipelineResult {
+  pipeline: CompiledGraph;
+  depthNodeId: NodeId;
+  hmrNodeId: NodeId;
+  solverNodeId: NodeId;
+}
 
 /**
  * Build the JOSH (Joint Optimization for 4D Human-Scene Reconstruction) pipeline.
@@ -23,7 +31,7 @@ import { JoshSolverNode } from './nodes/josh-solver.node.ts';
  *   Island 0 [WebGPU]: depthNode, hmrNode (parallel — no inter-dependency)
  *   Island 1 [Hybrid]: solverNode (waits for Island 0)
  */
-export async function buildJoshPipeline(ctx: NodeContext): Promise<CompiledGraph> {
+export async function buildJoshPipeline(ctx: NodeContext): Promise<JoshPipelineResult> {
   const depthNode = new DepthEstimationNode();
   const hmrNode = new HumanMeshRecoveryNode();
   const solverNode = new JoshSolverNode();
@@ -52,5 +60,11 @@ export async function buildJoshPipeline(ctx: NodeContext): Promise<CompiledGraph
     .setOutput(solverNode.id, 'cameraExtrinsics');
 
   // Compile: validates DAG, performs island fusion, allocates buffers
-  return graph.compile(ctx);
+  const pipeline = await graph.compile(ctx);
+  return {
+    pipeline,
+    depthNodeId: depthNode.id,
+    hmrNodeId: hmrNode.id,
+    solverNodeId: solverNode.id,
+  };
 }

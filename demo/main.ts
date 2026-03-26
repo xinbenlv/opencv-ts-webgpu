@@ -68,24 +68,66 @@ async function main() {
     resourceTracker,
   };
 
-  // ─── Step 3: Open camera (fall back to sample video) ───
-  statusEl.textContent = 'Requesting camera access...';
+  // ─── Step 3: Video input source ───
   const videoEl = document.getElementById('videoInput') as HTMLVideoElement;
+  const inputSelect = document.getElementById('inputSource') as HTMLSelectElement;
+  let cameraStream: MediaStream | null = null;
+
+  async function switchToCamera() {
+    try {
+      statusEl.textContent = 'Requesting camera access...';
+      statusEl.style.display = '';
+      if (videoEl.src) { videoEl.removeAttribute('src'); videoEl.load(); }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' },
+        audio: false,
+      });
+      cameraStream = stream;
+      videoEl.srcObject = stream;
+      await videoEl.play();
+      statusEl.style.display = 'none';
+    } catch {
+      statusEl.textContent = 'Camera unavailable';
+      inputSelect.value = 'sample';
+      await switchToSample();
+    }
+  }
+
+  async function switchToSample() {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+      cameraStream = null;
+    }
+    videoEl.srcObject = null;
+    videoEl.src = './assets/josh-demo.mp4';
+    videoEl.loop = true;
+    videoEl.muted = true;
+    await videoEl.play().catch(() => {});
+    statusEl.style.display = 'none';
+  }
+
+  inputSelect.addEventListener('change', () => {
+    if (inputSelect.value === 'camera') {
+      switchToCamera();
+    } else {
+      switchToSample();
+    }
+  });
+
+  // Try camera first, fall back to sample
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480, facingMode: 'user' },
       audio: false,
     });
+    cameraStream = stream;
     videoEl.srcObject = stream;
     await videoEl.play();
     statusEl.style.display = 'none';
+    inputSelect.value = 'camera';
   } catch {
-    statusEl.textContent = 'Camera unavailable — using sample video';
-    videoEl.src = './assets/josh-demo.mov';
-    videoEl.loop = true;
-    videoEl.muted = true;
-    await videoEl.play().catch(() => {});
-    statusEl.style.display = 'none';
+    inputSelect.value = 'sample';
+    await switchToSample();
   }
 
   // ─── Step 4: Build JOSH pipeline ───
@@ -94,14 +136,16 @@ async function main() {
   // Dynamic import to allow tree-shaking in library builds
   const { buildJoshPipeline } = await import('../src/graphs/josh/pipeline.ts');
 
-  let pipeline;
+  let pipelineResult;
   try {
-    pipeline = await buildJoshPipeline(ctx);
+    pipelineResult = await buildJoshPipeline(ctx);
   } catch (e) {
     statusEl.textContent = `Pipeline build failed: ${e instanceof Error ? e.message : String(e)}`;
     console.error(e);
     return;
   }
+
+  const { pipeline, depthNodeId, hmrNodeId, solverNodeId } = pipelineResult;
 
   // ─── Step 5: Render loop ───
   const FRAME_W = 384;
@@ -109,12 +153,162 @@ async function main() {
   const frameCanvas = document.createElement('canvas');
   frameCanvas.width = FRAME_W;
   frameCanvas.height = FRAME_H;
-  const frameCtx2d = frameCanvas.getContext('2d')!;
+  const frameCtx2d = frameCanvas.getContext('2d', { willReadFrequently: true })!;
   const rgbFloat32 = new Float32Array(FRAME_H * FRAME_W * 3);
+
+  // Visualization canvases
+  const depthCanvas = document.getElementById('depthCanvas') as HTMLCanvasElement;
+  const meshCanvas = document.getElementById('meshCanvas') as HTMLCanvasElement;
+  const outputCanvas = document.getElementById('outputCanvas') as HTMLCanvasElement;
+  depthCanvas.width = FRAME_W;
+  depthCanvas.height = FRAME_H;
+  meshCanvas.width = FRAME_W;
+  meshCanvas.height = FRAME_H;
+  outputCanvas.width = FRAME_W;
+  outputCanvas.height = FRAME_H;
+  const depthCtx = depthCanvas.getContext('2d')!;
+  const meshCtx = meshCanvas.getContext('2d')!;
+  const outputCtx = outputCanvas.getContext('2d')!;
+
+  // SMPL skeleton definition (24 joints, parent indices)
+  const SMPL_PARENTS = [-1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19,20,21];
+  const SMPL_BONE_COLORS = [
+    '#4ade80', // torso: green
+    '#60a5fa', // left side: blue
+    '#f87171', // right side: red
+  ];
+  function boneColor(i: number): string {
+    const name = (['pelvis','l_hip','r_hip','spine1','l_knee','r_knee','spine2',
+      'l_ankle','r_ankle','spine3','l_foot','r_foot','neck','l_collar','r_collar',
+      'head','l_shoulder','r_shoulder','l_elbow','r_elbow','l_wrist','r_wrist',
+      'l_hand','r_hand'] as const)[i] ?? '';
+    if (name.startsWith('l_')) return SMPL_BONE_COLORS[1]!;
+    if (name.startsWith('r_')) return SMPL_BONE_COLORS[2]!;
+    return SMPL_BONE_COLORS[0]!;
+  }
+
+  // T-pose reference positions (normalized 0–1 in canvas space)
+  const TPOSE: [number, number][] = [
+    [0.50, 0.45], // 0 pelvis
+    [0.44, 0.48], // 1 l_hip
+    [0.56, 0.48], // 2 r_hip
+    [0.50, 0.38], // 3 spine1
+    [0.44, 0.62], // 4 l_knee
+    [0.56, 0.62], // 5 r_knee
+    [0.50, 0.32], // 6 spine2
+    [0.44, 0.78], // 7 l_ankle
+    [0.56, 0.78], // 8 r_ankle
+    [0.50, 0.26], // 9 spine3
+    [0.44, 0.84], // 10 l_foot
+    [0.56, 0.84], // 11 r_foot
+    [0.50, 0.20], // 12 neck
+    [0.46, 0.22], // 13 l_collar
+    [0.54, 0.22], // 14 r_collar
+    [0.50, 0.12], // 15 head
+    [0.36, 0.22], // 16 l_shoulder
+    [0.64, 0.22], // 17 r_shoulder
+    [0.28, 0.32], // 18 l_elbow
+    [0.72, 0.32], // 19 r_elbow
+    [0.22, 0.42], // 20 l_wrist
+    [0.78, 0.42], // 21 r_wrist
+    [0.20, 0.45], // 22 l_hand
+    [0.80, 0.45], // 23 r_hand
+  ];
+
+  function renderSkeletonToCanvas(
+    joints: Float32Array,
+    ctx2d: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+  ) {
+    // Draw video frame as background
+    ctx2d.drawImage(videoEl, 0, 0, w, h);
+    ctx2d.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx2d.fillRect(0, 0, w, h);
+
+    // Check if joints are all zero (placeholder) → use T-pose
+    let allZero = true;
+    for (let i = 0; i < Math.min(joints.length, 72); i++) {
+      if (joints[i] !== 0) { allZero = false; break; }
+    }
+
+    const positions: [number, number][] = [];
+    for (let j = 0; j < 24; j++) {
+      if (allZero) {
+        positions.push([TPOSE[j]![0] * w, TPOSE[j]![1] * h]);
+      } else {
+        // Project 3D joints to 2D (simple orthographic: x,y → canvas, ignore z)
+        const x = joints[j * 3]! * w * 0.5 + w * 0.5;
+        const y = -joints[j * 3 + 1]! * h * 0.5 + h * 0.5;
+        positions.push([x, y]);
+      }
+    }
+
+    // Draw bones
+    ctx2d.lineWidth = 3;
+    for (let j = 1; j < 24; j++) {
+      const parent = SMPL_PARENTS[j]!;
+      ctx2d.strokeStyle = boneColor(j);
+      ctx2d.beginPath();
+      ctx2d.moveTo(positions[parent]![0], positions[parent]![1]);
+      ctx2d.lineTo(positions[j]![0], positions[j]![1]);
+      ctx2d.stroke();
+    }
+
+    // Draw joints
+    for (let j = 0; j < 24; j++) {
+      const [x, y] = positions[j]!;
+      ctx2d.fillStyle = j === 15 ? '#fbbf24' : boneColor(j); // head = yellow
+      ctx2d.beginPath();
+      ctx2d.arc(x, y, j === 15 ? 8 : 4, 0, Math.PI * 2);
+      ctx2d.fill();
+      ctx2d.strokeStyle = '#000';
+      ctx2d.lineWidth = 1;
+      ctx2d.stroke();
+    }
+
+    // Label
+    ctx2d.fillStyle = allZero ? '#666' : '#4ade80';
+    ctx2d.font = '11px system-ui';
+    ctx2d.textAlign = 'left';
+    ctx2d.fillText(allZero ? 'SMPL T-pose (no model)' : 'SMPL Joints (live)', 8, h - 8);
+  }
 
   let frameCount = 0;
   let lastTime = performance.now();
   let fps = 0;
+
+  function renderDepthToCanvas(
+    depthData: Float32Array,
+    ctx2d: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+  ) {
+    // Find min/max for normalization
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < depthData.length; i++) {
+      const v = depthData[i]!;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    const range = max - min || 1;
+
+    const imgData = ctx2d.createImageData(w, h);
+    const px = imgData.data;
+    for (let i = 0; i < depthData.length; i++) {
+      const norm = (depthData[i]! - min) / range;
+      // Viridis-inspired colormap: blue → green → yellow
+      const r = Math.min(255, Math.max(0, (norm * 3 - 1) * 255));
+      const g = Math.min(255, Math.max(0, Math.sin(norm * Math.PI) * 255));
+      const b = Math.min(255, Math.max(0, (1 - norm * 2) * 255));
+      px[i * 4] = r;
+      px[i * 4 + 1] = g;
+      px[i * 4 + 2] = b;
+      px[i * 4 + 3] = 255;
+    }
+    ctx2d.putImageData(imgData, 0, 0);
+  }
 
   async function renderFrame() {
     const now = performance.now();
@@ -141,13 +335,28 @@ async function main() {
         rgbFloat32[i * 3 + 1] = (px[i * 4 + 1] ?? 0) / 255;
         rgbFloat32[i * 3 + 2] = (px[i * 4 + 2] ?? 0) / 255;
       }
-      for (const { nodeId, portName } of pipeline!.graphInputs) {
-        pipeline!.writeInput(nodeId, portName, rgbFloat32.buffer);
+      for (const { nodeId, portName } of pipeline.graphInputs) {
+        pipeline.writeInput(nodeId, portName, rgbFloat32.buffer);
       }
     }
 
     try {
-      await pipeline!.execute(frameCount);
+      await pipeline.execute(frameCount);
+
+      // Visualize outputs every 6 frames (throttle GPU readback)
+      if (frameCount % 6 === 0) {
+        // Node A: depth estimation output (via edge to solver)
+        const depthBuf = await pipeline.readOutput(depthNodeId, 'depthMap');
+        renderDepthToCanvas(new Float32Array(depthBuf), depthCtx, FRAME_W, FRAME_H);
+
+        // Node B: HMR skeleton overlay
+        const jointsBuf = await pipeline.readOutput(hmrNodeId, 'jointPositions');
+        renderSkeletonToCanvas(new Float32Array(jointsBuf), meshCtx, FRAME_W, FRAME_H);
+
+        // Node C: solver optimized depth output
+        const solverBuf = await pipeline.readOutput(solverNodeId, 'optimizedDepth');
+        renderDepthToCanvas(new Float32Array(solverBuf), outputCtx, FRAME_W, FRAME_H);
+      }
     } catch (e) {
       console.error('Frame execution error:', e);
     }

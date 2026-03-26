@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCV.ts 5.0 — JOSH Live Demo</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #0a0a0a;
+        color: #e0e0e0;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      header {
+        padding: 1rem 2rem;
+        border-bottom: 1px solid #222;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+      header h1 { font-size: 1.2rem; font-weight: 600; }
+      header .tag {
+        font-size: 0.75rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        background: #1a3a1a;
+        color: #4ade80;
+      }
+      main {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
+        gap: 1px;
+        background: #222;
+        padding: 1px;
+      }
+      .panel {
+        background: #111;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .panel-header {
+        padding: 0.5rem 1rem;
+        font-size: 0.85rem;
+        font-weight: 500;
+        border-bottom: 1px solid #222;
+        color: #888;
+      }
+      .panel-body {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      }
+      canvas, video {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      #stats {
+        position: fixed;
+        bottom: 1rem;
+        right: 1rem;
+        font-size: 0.75rem;
+        font-family: monospace;
+        background: rgba(0,0,0,0.8);
+        padding: 0.5rem 1rem;
+        border-radius: 6px;
+        border: 1px solid #333;
+      }
+      .status { color: #666; font-style: italic; }
+    </style>
+    <script type="module" crossorigin src="/assets/index-BTNl_PqY.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>OpenCV.ts 5.0</h1>
+      <span class="tag">JOSH 4D Reconstruction</span>
+      <span class="tag">WebGPU</span>
+    </header>
+    <main>
+      <div class="panel">
+        <div class="panel-header" style="display:flex;align-items:center;gap:0.5rem;">
+          Input —
+          <select id="inputSource" style="background:#222;color:#ccc;border:1px solid #444;border-radius:4px;padding:0.15rem 0.3rem;font-size:0.8rem;">
+            <option value="camera">Camera</option>
+            <option value="sample">JOSH Demo Video</option>
+          </select>
+        </div>
+        <div class="panel-body">
+          <video id="videoInput" autoplay muted playsinline></video>
+          <span class="status" id="cameraStatus">Requesting camera...</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Node A — Depth Estimation</div>
+        <div class="panel-body">
+          <canvas id="depthCanvas"></canvas>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Node B — Human Mesh Recovery (SMPL)</div>
+        <div class="panel-body">
+          <canvas id="meshCanvas"></canvas>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Node C — JOSH Solver Output</div>
+        <div class="panel-body">
+          <canvas id="outputCanvas"></canvas>
+        </div>
+      </div>
+    </main>
+    <div id="stats">
+      <div>FPS: <span id="fps">--</span></div>
+      <div>Frame: <span id="frameCount">0</span></div>
+      <div>GPU Mem: <span id="gpuMem">--</span></div>
+    </div>
+  </body>
+</html>

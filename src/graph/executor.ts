@@ -9,6 +9,7 @@ import type { CompiledGraph, Island } from './compiler.ts';
  */
 export class GraphExecutor implements CompiledGraph {
   private readonly _graphInputBufferMap: Map<string, BufferId>;
+  private readonly _graphOutputBufferMap: Map<string, BufferId>;
 
   constructor(
     readonly id: GraphId,
@@ -17,13 +18,18 @@ export class GraphExecutor implements CompiledGraph {
     readonly executionOrder: readonly NodeId[],
     readonly islands: readonly Island[],
     readonly graphInputs: ReadonlyArray<{ nodeId: NodeId; portName: string; bufferId?: string }>,
-    readonly graphOutputs: ReadonlyArray<{ nodeId: NodeId; portName: string }>,
+    readonly graphOutputs: ReadonlyArray<{ nodeId: NodeId; portName: string; bufferId?: string }>,
     private readonly _ctx: NodeContext,
   ) {
     this._graphInputBufferMap = new Map(
       graphInputs
         .filter((gi) => gi.bufferId != null)
         .map((gi) => [`${gi.nodeId}:${gi.portName}`, gi.bufferId! as BufferId]),
+    );
+    this._graphOutputBufferMap = new Map(
+      graphOutputs
+        .filter((go) => go.bufferId != null)
+        .map((go) => [`${go.nodeId}:${go.portName}`, go.bufferId! as BufferId]),
     );
   }
 
@@ -61,6 +67,22 @@ export class GraphExecutor implements CompiledGraph {
     }
     const gpuBuffer = this._ctx.bufferManager.getGpuBuffer(bufferId);
     this._ctx.device.queue.writeBuffer(gpuBuffer, 0, data);
+  }
+
+  async readOutput(nodeId: NodeId, portName: string): Promise<ArrayBuffer> {
+    // Check graph output buffers first
+    const graphBufferId = this._graphOutputBufferMap.get(`${nodeId}:${portName}`);
+    if (graphBufferId) {
+      return this._ctx.bufferManager.gpuToCpu(graphBufferId);
+    }
+    // Fall back to edge buffers (for intermediate node outputs)
+    const edge = this._edges.find(
+      (e) => e.sourceNode === nodeId && e.sourcePort === portName,
+    );
+    if (edge?.bufferId) {
+      return this._ctx.bufferManager.gpuToCpu(edge.bufferId);
+    }
+    throw new Error(`No output buffer for port "${portName}" on node "${nodeId}".`);
   }
 
   dispose(): void {
@@ -111,6 +133,11 @@ export class GraphExecutor implements CompiledGraph {
       },
 
       getOutput: (name: string): GPUBuffer | ArrayBuffer => {
+        // Check graph output buffers first
+        const graphOutputBufferId = this._graphOutputBufferMap.get(`${nodeId}:${name}`);
+        if (graphOutputBufferId) {
+          return bm.getGpuBuffer(graphOutputBufferId);
+        }
         const edge = this._edges.find(
           (e) => e.sourceNode === nodeId && e.sourcePort === name,
         );
