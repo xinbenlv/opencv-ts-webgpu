@@ -68,20 +68,24 @@ async function main() {
     resourceTracker,
   };
 
-  // ─── Step 3: Open camera ───
+  // ─── Step 3: Open camera (fall back to sample video) ───
   statusEl.textContent = 'Requesting camera access...';
+  const videoEl = document.getElementById('videoInput') as HTMLVideoElement;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480, facingMode: 'user' },
       audio: false,
     });
-    const videoEl = document.getElementById('videoInput') as HTMLVideoElement;
     videoEl.srcObject = stream;
     await videoEl.play();
     statusEl.style.display = 'none';
-  } catch (e) {
-    statusEl.textContent = `Camera access denied: ${e instanceof Error ? e.message : String(e)}`;
-    return;
+  } catch {
+    statusEl.textContent = 'Camera unavailable — using sample video';
+    videoEl.src = './assets/josh-demo.mov';
+    videoEl.loop = true;
+    videoEl.muted = true;
+    await videoEl.play().catch(() => {});
+    statusEl.style.display = 'none';
   }
 
   // ─── Step 4: Build JOSH pipeline ───
@@ -100,6 +104,14 @@ async function main() {
   }
 
   // ─── Step 5: Render loop ───
+  const FRAME_W = 384;
+  const FRAME_H = 384;
+  const frameCanvas = document.createElement('canvas');
+  frameCanvas.width = FRAME_W;
+  frameCanvas.height = FRAME_H;
+  const frameCtx2d = frameCanvas.getContext('2d')!;
+  const rgbFloat32 = new Float32Array(FRAME_H * FRAME_W * 3);
+
   let frameCount = 0;
   let lastTime = performance.now();
   let fps = 0;
@@ -118,6 +130,21 @@ async function main() {
     }
 
     frameEl.textContent = String(frameCount);
+
+    // Upload current video frame to all graph input ports
+    if (videoEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      frameCtx2d.drawImage(videoEl, 0, 0, FRAME_W, FRAME_H);
+      const imageData = frameCtx2d.getImageData(0, 0, FRAME_W, FRAME_H);
+      const px = imageData.data;
+      for (let i = 0; i < FRAME_H * FRAME_W; i++) {
+        rgbFloat32[i * 3]     = (px[i * 4]     ?? 0) / 255;
+        rgbFloat32[i * 3 + 1] = (px[i * 4 + 1] ?? 0) / 255;
+        rgbFloat32[i * 3 + 2] = (px[i * 4 + 2] ?? 0) / 255;
+      }
+      for (const { nodeId, portName } of pipeline!.graphInputs) {
+        pipeline!.writeInput(nodeId, portName, rgbFloat32.buffer);
+      }
+    }
 
     try {
       await pipeline!.execute(frameCount);

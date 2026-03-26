@@ -5,6 +5,8 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 export default defineConfig({
   plugins: [basicSsl()],
 
+  root: 'demo',
+
   resolve: {
     alias: {
       '@core': resolve(__dirname, 'src/core'),

@@ -1,4 +1,4 @@
-import type { GraphId, NodeId } from '../core/types.ts';
+import type { GraphId, NodeId, BufferId } from '../core/types.ts';
 import type { GComputeNode, ExecutionContext, NodeContext } from './node.ts';
 import type { Edge } from './edge.ts';
 import type { CompiledGraph, Island } from './compiler.ts';
@@ -8,16 +8,24 @@ import type { CompiledGraph, Island } from './compiler.ts';
  * Dispatches nodes in topological order, managing buffer bindings per frame.
  */
 export class GraphExecutor implements CompiledGraph {
+  private readonly _graphInputBufferMap: Map<string, BufferId>;
+
   constructor(
     readonly id: GraphId,
     private readonly _nodes: ReadonlyMap<NodeId, GComputeNode>,
     private readonly _edges: readonly Edge[],
     readonly executionOrder: readonly NodeId[],
     readonly islands: readonly Island[],
-    readonly graphInputs: ReadonlyArray<{ nodeId: NodeId; portName: string }>,
+    readonly graphInputs: ReadonlyArray<{ nodeId: NodeId; portName: string; bufferId?: string }>,
     readonly graphOutputs: ReadonlyArray<{ nodeId: NodeId; portName: string }>,
     private readonly _ctx: NodeContext,
-  ) {}
+  ) {
+    this._graphInputBufferMap = new Map(
+      graphInputs
+        .filter((gi) => gi.bufferId != null)
+        .map((gi) => [`${gi.nodeId}:${gi.portName}`, gi.bufferId! as BufferId]),
+    );
+  }
 
   async execute(frameIndex: number): Promise<void> {
     const commandEncoder = this._ctx.device.createCommandEncoder({
@@ -44,6 +52,15 @@ export class GraphExecutor implements CompiledGraph {
 
     // Submit all GPU commands for this frame
     this._ctx.device.queue.submit([commandEncoder.finish()]);
+  }
+
+  writeInput(nodeId: NodeId, portName: string, data: ArrayBufferLike): void {
+    const bufferId = this._graphInputBufferMap.get(`${nodeId}:${portName}`);
+    if (!bufferId) {
+      throw new Error(`No graph input buffer for port "${portName}" on node "${nodeId}".`);
+    }
+    const gpuBuffer = this._ctx.bufferManager.getGpuBuffer(bufferId);
+    this._ctx.device.queue.writeBuffer(gpuBuffer, 0, data);
   }
 
   dispose(): void {
@@ -79,6 +96,11 @@ export class GraphExecutor implements CompiledGraph {
       timestampMs,
 
       getInput: (name: string): GPUBuffer | ArrayBuffer => {
+        // Check graph input buffers first
+        const graphInputBufferId = this._graphInputBufferMap.get(`${nodeId}:${name}`);
+        if (graphInputBufferId) {
+          return bm.getGpuBuffer(graphInputBufferId);
+        }
         const edge = this._edges.find(
           (e) => e.targetNode === nodeId && e.targetPort === name,
         );

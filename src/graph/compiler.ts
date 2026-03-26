@@ -20,7 +20,9 @@ export interface CompiledGraph {
   readonly id: GraphId;
   readonly executionOrder: readonly NodeId[];
   readonly islands: readonly Island[];
+  readonly graphInputs: ReadonlyArray<{ nodeId: NodeId; portName: string }>;
   execute(frameIndex: number): Promise<void>;
+  writeInput(nodeId: NodeId, portName: string, data: ArrayBufferLike): void;
   dispose(): void;
 }
 
@@ -193,6 +195,17 @@ export class GraphCompiler {
     ctx: NodeContext,
     order: readonly NodeId[],
   ): void {
+    // Allocate buffers for graph input ports
+    for (const graphInput of this._graphInputs) {
+      const node = this._nodes.get(graphInput.nodeId)!;
+      const port = node.inputs.find((p) => p.name === graphInput.portName)!;
+      const id = ctx.bufferManager.acquire(
+        port.layout,
+        `graphInput.${graphInput.nodeId}.${graphInput.portName}`,
+      );
+      (graphInput as { bufferId?: typeof id }).bufferId = id;
+    }
+
     for (const edge of this._edges) {
       const sourceNode = this._nodes.get(edge.sourceNode)!;
       const sourcePort = sourceNode.outputs.find((p) => p.name === edge.sourcePort)!;
