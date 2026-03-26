@@ -82,10 +82,8 @@ export class DepthEstimationNode
 
     const ort = await getOrt();
 
-    // Point ORT to the correct WASM file location.
-    // In dev mode, Vite serves demo/public/ at the root.
-    // In production, the bundler inlines the WASM as an asset.
-    ort.env.wasm.wasmPaths = '/';
+    // Point ORT WASM files to demo/assets/ort/ (copied from node_modules at build time)
+    ort.env.wasm.wasmPaths = './assets/ort/';
     ort.env.wasm.numThreads = 1; // Avoid SharedArrayBuffer conflicts with main thread
 
     try {
