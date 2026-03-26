@@ -48,23 +48,42 @@ async function main() {
   const gpuMemEl = document.getElementById('gpuMem')!;
   const loadingOverlay = document.getElementById('loadingOverlay')!;
   const loadingSteps = document.getElementById('loadingSteps')!;
-  void document.getElementById('loadingError')!; // reserved for future error display
+  const statusModal = document.getElementById('statusModal')!;
+  const statusModalSteps = document.getElementById('statusModalSteps')!;
+  const showStatusBtn = document.getElementById('showStatusBtn')!;
+  const closeStatusBtn = document.getElementById('closeStatusBtn')!;
 
   // ─── Loading status tracker ───
   const stepStates = new Map<string, { status: 'pending' | 'active' | 'done' | 'warn' | 'error'; text: string }>();
 
-  function updateLoadingUI() {
+  function renderSteps(): string {
     const icons = { pending: '\u2502', active: '\u25B6', done: '\u2714', warn: '\u26A0', error: '\u2718' };
     const colors = { pending: '#555', active: '#60a5fa', done: '#4ade80', warn: '#fbbf24', error: '#f87171' };
-    loadingSteps.innerHTML = [...stepStates.entries()].map(([, { status, text }]) =>
+    return [...stepStates.entries()].map(([, { status, text }]) =>
       `<div style="color:${colors[status]}">${icons[status]} ${text}</div>`
     ).join('');
+  }
+
+  function updateLoadingUI() {
+    const html = renderSteps();
+    loadingSteps.innerHTML = html;
+    statusModalSteps.innerHTML = html; // keep modal in sync
   }
 
   function setStep(id: string, status: 'pending' | 'active' | 'done' | 'warn' | 'error', text: string) {
     stepStates.set(id, { status, text });
     updateLoadingUI();
   }
+
+  // Status modal toggle
+  showStatusBtn.addEventListener('click', () => {
+    statusModal.style.display = 'flex';
+    statusModalSteps.innerHTML = renderSteps();
+  });
+  closeStatusBtn.addEventListener('click', () => { statusModal.style.display = 'none'; });
+  statusModal.addEventListener('click', (e) => {
+    if (e.target === statusModal) statusModal.style.display = 'none';
+  });
 
   // Expose globally so nodes can report progress
   (window as any).__joshLoadingStatus = setStep;
@@ -161,7 +180,7 @@ async function main() {
   setStep('pipeline', 'active', 'Compiling graph...');
   setStep('depthModel', 'pending', 'Node A: MiDAS depth model (64 MB)');
   setStep('hmrModel', 'pending', 'Node B: ROMP pose model (111 MB)');
-  setStep('smplModel', 'pending', 'Node B: SMPL forward pass model (17 MB)');
+  setStep('smplModel', 'pending', 'Node B: SMPL forward kinematics (CPU)');
   setStep('solver', 'pending', 'Node C: JOSH solver (L-BFGS + gradients)');
   statusEl.textContent = 'Compiling JOSH pipeline...';
 

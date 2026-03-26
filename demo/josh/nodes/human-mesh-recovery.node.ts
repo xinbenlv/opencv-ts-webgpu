@@ -5,32 +5,21 @@ import {
   SMPL_VERTEX_COUNT,
   SMPL_JOINT_COUNT,
   SMPL_POSE_DIM,
+  SMPL_KINEMATIC_TREE,
 } from '../models/smpl.ts';
 import { cachedFetchModel } from '../models/cached-fetch.ts';
+import { axisAngleToRotMat, getTposeJoints, buildSyntheticSmplModel } from '../models/smpl-synthetic.ts';
 
 const HMR_H = 384;
 const HMR_W = 384;
 const ROMP_H = 512;
 const ROMP_W = 512;
 
-const rgbLayout = computeBufferLayout(
-  [dim(HMR_H), dim(HMR_W), dim(3)] as Shape3D,
-  'f32',
-);
-
-const verticesLayout = computeBufferLayout(
-  [dim(SMPL_VERTEX_COUNT), dim(3)] as Shape2D,
-  'f32',
-);
-
-const jointsLayout = computeBufferLayout(
-  [dim(SMPL_JOINT_COUNT), dim(3)] as Shape2D,
-  'f32',
-);
-
+const rgbLayout = computeBufferLayout([dim(HMR_H), dim(HMR_W), dim(3)] as Shape3D, 'f32');
+const verticesLayout = computeBufferLayout([dim(SMPL_VERTEX_COUNT), dim(3)] as Shape2D, 'f32');
+const jointsLayout = computeBufferLayout([dim(SMPL_JOINT_COUNT), dim(3)] as Shape2D, 'f32');
 const cameraLayout = computeBufferLayout(
-  [dim(3)] as readonly [typeof dim extends (n: 3) => infer R ? R : never],
-  'f32',
+  [dim(3)] as readonly [typeof dim extends (n: 3) => infer R ? R : never], 'f32',
 );
 
 const INPUT_PORTS = [
@@ -50,9 +39,69 @@ async function getOrt() {
 }
 
 /**
- * Node B: Human Mesh Recovery using ROMP + nosmpl ONNX models.
+ * CPU-side SMPL forward kinematics: axis-angle pose → 3D joint positions.
+ * Uses the kinematic tree to compose transforms from root to leaves.
+ */
+function computeJointsFromPose(poseAxisAngle: Float32Array, tposeJoints: Float32Array): Float32Array {
+  const joints = new Float32Array(SMPL_JOINT_COUNT * 3);
+  // Global 4x4 transforms per joint
+  const transforms = new Float64Array(SMPL_JOINT_COUNT * 16);
+
+  for (let j = 0; j < SMPL_JOINT_COUNT; j++) {
+    const rot = axisAngleToRotMat(
+      poseAxisAngle[j * 3]!,
+      poseAxisAngle[j * 3 + 1]!,
+      poseAxisAngle[j * 3 + 2]!,
+    );
+
+    // Build local 4x4: [R | t; 0 0 0 1] column-major
+    const local = new Float64Array(16);
+    local[0] = rot[0]!; local[1] = rot[3]!; local[2] = rot[6]!; local[3] = 0;
+    local[4] = rot[1]!; local[5] = rot[4]!; local[6] = rot[7]!; local[7] = 0;
+    local[8] = rot[2]!; local[9] = rot[5]!; local[10] = rot[8]!; local[11] = 0;
+    local[12] = tposeJoints[j * 3]!;
+    local[13] = tposeJoints[j * 3 + 1]!;
+    local[14] = tposeJoints[j * 3 + 2]!;
+    local[15] = 1;
+
+    const parent = SMPL_KINEMATIC_TREE[j]!;
+    const tBase = j * 16;
+
+    if (parent < 0) {
+      transforms.set(local, tBase);
+    } else {
+      // Relative translation
+      local[12] -= tposeJoints[parent * 3]!;
+      local[13] -= tposeJoints[parent * 3 + 1]!;
+      local[14] -= tposeJoints[parent * 3 + 2]!;
+      // T_global = T_parent * T_local
+      const pBase = parent * 16;
+      for (let col = 0; col < 4; col++) {
+        for (let row = 0; row < 4; row++) {
+          let sum = 0;
+          for (let k = 0; k < 4; k++) {
+            sum += transforms[pBase + k * 4 + row]! * local[col * 4 + k]!;
+          }
+          transforms[tBase + col * 4 + row] = sum;
+        }
+      }
+    }
+
+    // Joint position = translation column of global transform
+    joints[j * 3] = transforms[tBase + 12]!;
+    joints[j * 3 + 1] = transforms[tBase + 13]!;
+    joints[j * 3 + 2] = transforms[tBase + 14]!;
+  }
+
+  return joints;
+}
+
+/**
+ * Node B: Human Mesh Recovery using ROMP ONNX + CPU SMPL forward kinematics.
  *
- * Falls back to simulated animation if models fail to load.
+ * ROMP: image → SMPL params (pose θ, shape β, camera)
+ * CPU FK: pose θ → joint positions (using kinematic tree)
+ * Synthetic mesh: vertices from buildSyntheticSmplModel()
  */
 export class HumanMeshRecoveryNode
   implements GComputeNode<typeof INPUT_PORTS, typeof OUTPUT_PORTS>
@@ -66,9 +115,8 @@ export class HumanMeshRecoveryNode
   private _device: GPUDevice | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _rompSession: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private _smplSession: any = null;
   private _useSimulation = false;
+  private _tposeJoints: Float32Array | null = null;
 
   private _rompInput = new Float32Array(1 * ROMP_H * ROMP_W * 3);
   private _verticesOut = new Float32Array(SMPL_VERTEX_COUNT * 3);
@@ -76,11 +124,15 @@ export class HumanMeshRecoveryNode
 
   constructor(
     private readonly _rompModelUrl = './assets/models/romp.onnx',
-    private readonly _smplModelUrl = './assets/models/smpl_sim.onnx',
   ) {}
 
   async initialize(ctx: NodeContext): Promise<void> {
     this._device = ctx.device;
+    this._tposeJoints = getTposeJoints();
+
+    // Pre-fill vertices from synthetic model (used for mesh output)
+    const synth = buildSyntheticSmplModel();
+    this._verticesOut.set(synth.meanTemplate.subarray(0, this._verticesOut.length));
 
     const ort = await getOrt();
     ort.env.wasm.wasmPaths = './assets/ort/';
@@ -93,29 +145,17 @@ export class HumanMeshRecoveryNode
         this._rompModelUrl, 'hmrModel', 'Node B: ROMP pose model', '111 MB', status,
       );
       status?.('hmrModel', 'active', 'Node B: Creating ROMP session...');
-      console.log('[HMR] Creating ROMP session...');
       this._rompSession = await ort.InferenceSession.create(rompBuf, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
       });
       status?.('hmrModel', 'done', 'Node B: ROMP pose model ready');
+      status?.('smplModel', 'done', 'Node B: SMPL forward kinematics (CPU)');
       console.log('[HMR] ROMP loaded:', this._rompSession.inputNames, '→', this._rompSession.outputNames);
-
-      const smplBuf = await cachedFetchModel(
-        this._smplModelUrl, 'smplModel', 'Node B: SMPL forward pass', '17 MB', status,
-      );
-      status?.('smplModel', 'active', 'Node B: Creating SMPL session...');
-      console.log('[HMR] Creating SMPL session...');
-      this._smplSession = await ort.InferenceSession.create(smplBuf, {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'all',
-      });
-      status?.('smplModel', 'done', 'Node B: SMPL forward pass model ready');
-      console.log('[HMR] SMPL loaded:', this._smplSession.inputNames, '→', this._smplSession.outputNames);
     } catch (e) {
-      console.warn('[HMR] Model loading failed, using simulated animation:', e);
+      console.warn('[HMR] ROMP loading failed, using simulated animation:', e);
       status?.('hmrModel', 'warn', 'Node B: ROMP unavailable — using simulated pose');
-      status?.('smplModel', 'warn', 'Node B: SMPL unavailable — using simulated mesh');
+      status?.('smplModel', 'warn', 'Node B: Using simulated mesh');
       this._useSimulation = true;
     }
   }
@@ -193,7 +233,7 @@ export class HumanMeshRecoveryNode
       }
     }
 
-    // Extract SMPL params: [0-2] camera, [3-74] pose, [75-84] shape
+    // Extract SMPL params: [0-2] camera, [3-74] pose (72), [75-84] shape (10)
     const camera = new Float32Array(3);
     const poseAxisAngle = new Float32Array(SMPL_POSE_DIM);
 
@@ -204,38 +244,16 @@ export class HumanMeshRecoveryNode
       poseAxisAngle[c] = paramsMaps[(c + 3) * mapSize * mapSize + bestIdx]!;
     }
 
-    // SMPL forward pass
-    const globalOrient = new Float32Array([poseAxisAngle[0]!, poseAxisAngle[1]!, poseAxisAngle[2]!]);
-    const bodyPose = new Float32Array(23 * 3);
-    for (let i = 0; i < 23 * 3; i++) bodyPose[i] = poseAxisAngle[i + 3]!;
+    // CPU SMPL forward kinematics: pose → joints
+    const joints = computeJointsFromPose(poseAxisAngle, this._tposeJoints!);
+    this._jointsOut.set(joints);
 
-    const orientTensor = new ort.Tensor('float32', globalOrient, [1, 1, 3]);
-    const bodyTensor = new ort.Tensor('float32', bodyPose, [1, 23, 3]);
-    const smplFeeds: Record<string, InstanceType<typeof ort.Tensor>> = {};
-    smplFeeds[this._smplSession.inputNames[0]!] = orientTensor;
-    smplFeeds[this._smplSession.inputNames[1]!] = bodyTensor;
-    const smplResults = await this._smplSession.run(smplFeeds);
-    const vertices = smplResults['vertices']!.data as Float32Array;
-    const joints = smplResults['joints']!.data as Float32Array;
-
-    // Copy to output
-    const numVerts = Math.min(vertices.length, this._verticesOut.length);
-    this._verticesOut.set(vertices.subarray(0, numVerts));
-    for (let j = 0; j < SMPL_JOINT_COUNT; j++) {
-      this._jointsOut[j * 3] = joints[j * 3]!;
-      this._jointsOut[j * 3 + 1] = joints[j * 3 + 1]!;
-      this._jointsOut[j * 3 + 2] = joints[j * 3 + 2]!;
-    }
-
+    // Upload to GPU
     this._device!.queue.writeBuffer(verticesOut, 0, this._verticesOut);
     this._device!.queue.writeBuffer(jointsOut, 0, this._jointsOut);
     this._device!.queue.writeBuffer(cameraOut, 0, camera);
   }
 
-  /**
-   * Simulation fallback when models aren't available.
-   * Produces walking animation so the pipeline keeps running.
-   */
   private _runSimulation(
     frameIndex: number,
     verticesOut: GPUBuffer,
@@ -246,28 +264,12 @@ export class HumanMeshRecoveryNode
     const walkPhase = Math.sin(t);
     const walkAmp = 0.3;
 
-    // Generate joint positions from walking animation
-    const TPOSE: [number, number, number][] = [
-      [0,0.9,0],[0.1,0.85,0],[-0.1,0.85,0],[0,1.05,0],[0.1,0.45,0],[-0.1,0.45,0],
-      [0,1.2,0],[0.1,0.05,0],[-0.1,0.05,0],[0,1.35,0],[0.1,0,0.05],[-0.1,0,0.05],
-      [0,1.5,0],[0.1,1.45,0],[-0.1,1.45,0],[0,1.65,0],[0.22,1.42,0],[-0.22,1.42,0],
-      [0.45,1.42,0],[-0.45,1.42,0],[0.65,1.42,0],[-0.65,1.42,0],[0.72,1.42,0],[-0.72,1.42,0],
-    ];
-
-    for (let j = 0; j < SMPL_JOINT_COUNT; j++) {
-      const pos = TPOSE[j]!;
-      this._jointsOut[j * 3] = pos[0];
-      this._jointsOut[j * 3 + 1] = pos[1];
-      this._jointsOut[j * 3 + 2] = pos[2];
-    }
-    // Add walking motion to hips/knees
+    const tpose = getTposeJoints();
+    this._jointsOut.set(tpose);
     this._jointsOut[1 * 3 + 2] = walkPhase * walkAmp * 0.2;
     this._jointsOut[2 * 3 + 2] = -walkPhase * walkAmp * 0.2;
     this._jointsOut[4 * 3 + 1] = 0.45 + Math.max(0, -walkPhase) * walkAmp * 0.3;
     this._jointsOut[5 * 3 + 1] = 0.45 + Math.max(0, walkPhase) * walkAmp * 0.3;
-
-    // Zero out vertices (no mesh in simulation mode)
-    this._verticesOut.fill(0);
 
     this._device!.queue.writeBuffer(verticesOut, 0, this._verticesOut);
     this._device!.queue.writeBuffer(jointsOut, 0, this._jointsOut);
@@ -276,6 +278,5 @@ export class HumanMeshRecoveryNode
 
   dispose(): void {
     this._rompSession?.release();
-    this._smplSession?.release();
   }
 }
