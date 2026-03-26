@@ -134,7 +134,7 @@ async function main() {
   statusEl.textContent = 'Compiling JOSH pipeline...';
 
   // Dynamic import to allow tree-shaking in library builds
-  const { buildJoshPipeline } = await import('../src/graphs/josh/pipeline.ts');
+  const { buildJoshPipeline } = await import('./josh/pipeline.ts');
 
   let pipelineResult;
   try {

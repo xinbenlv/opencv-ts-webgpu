@@ -1,7 +1,7 @@
-import { createGraphBuilder } from '../../graph/graph.ts';
-import type { NodeContext } from '../../graph/node.ts';
-import type { CompiledGraph } from '../../graph/compiler.ts';
-import type { NodeId } from '../../core/types.ts';
+import { createGraphBuilder } from '../../src/graph/graph.ts';
+import type { NodeContext } from '../../src/graph/node.ts';
+import type { CompiledGraph } from '../../src/graph/compiler.ts';
+import type { NodeId } from '../../src/core/types.ts';
 import { DepthEstimationNode } from './nodes/depth-estimation.node.ts';
 import { HumanMeshRecoveryNode } from './nodes/human-mesh-recovery.node.ts';
 import { JoshSolverNode } from './nodes/josh-solver.node.ts';

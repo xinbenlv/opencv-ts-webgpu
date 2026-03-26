@@ -1,4 +1,4 @@
-import { CvError } from '../../../core/errors.ts';
+import { CvError } from '../../../src/core/errors.ts';
 import type { SmplModelBuffers } from './smpl.ts';
 import {
   SMPL_VERTEX_COUNT,

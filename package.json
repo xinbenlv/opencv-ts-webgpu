@@ -18,7 +18,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "wasm:build": "cd wasm && wasm-pack build --target web --out-dir ../src/backends/wasm/pkg",
-    "build:demo": "vite build --config vite.config.pages.ts && rm -rf demo-webapp/public && cp -r dist demo-webapp/public && cp demo/assets/josh-demo.mp4 demo-webapp/public/assets/ && cp -r src/backends/wasm/pkg demo-webapp/public/assets/pkg"
+    "build:demo": "vite build --config vite.config.pages.ts && rm -rf demo-webapp/public && cp -r dist demo-webapp/public && cp demo/assets/josh-demo.mp4 demo-webapp/public/assets/ && cp -r demo/assets/models demo-webapp/public/assets/models && cp -r src/backends/wasm/pkg demo-webapp/public/assets/pkg"
   },
   "dependencies": {
     "onnxruntime-web": "^1.20.0"

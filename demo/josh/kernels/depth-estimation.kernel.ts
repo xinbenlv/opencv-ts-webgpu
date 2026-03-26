@@ -1,8 +1,6 @@
-import type { KernelDescriptor } from '../../backends/interface.ts';
-import { computeBufferLayout } from '../../core/types.ts';
-import type { Shape2D } from '../../core/types.ts';
-import { KernelRegistry } from '../registry.ts';
-
+import type { KernelDescriptor } from '../../../src/backends/interface.ts';
+import { computeBufferLayout } from '../../../src/core/types.ts';
+import type { Shape2D } from '../../../src/core/types.ts';
 import preprocessSource from './midas-preprocess.wgsl?raw';
 import postprocessSource from './midas-postprocess.wgsl?raw';
 
@@ -60,5 +58,4 @@ export const midasPostprocessKernel: KernelDescriptor = {
   },
 };
 
-KernelRegistry.register(midasPreprocessKernel);
-KernelRegistry.register(midasPostprocessKernel);
+// Kernels are used directly by the demo, not registered globally
