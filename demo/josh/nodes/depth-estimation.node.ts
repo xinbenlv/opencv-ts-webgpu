@@ -82,19 +82,23 @@ export class DepthEstimationNode
 
     const ort = await getOrt();
 
-    // Point ORT WASM files to demo/assets/ort/ (copied from node_modules at build time)
     ort.env.wasm.wasmPaths = './assets/ort/';
-    ort.env.wasm.numThreads = 1; // Avoid SharedArrayBuffer conflicts with main thread
+    ort.env.wasm.numThreads = 1;
+
+    // Pre-fetch model as ArrayBuffer to avoid COEP blocking ORT's internal fetch
+    console.log('[DepthEstimation] Downloading MiDAS model (64MB)...');
+    const modelBuf = await (await fetch(this._modelUrl)).arrayBuffer();
+    console.log('[DepthEstimation] Creating session...');
 
     try {
-      this._session = await ort.InferenceSession.create(this._modelUrl, {
+      this._session = await ort.InferenceSession.create(modelBuf, {
         executionProviders: ['webgpu'],
         graphOptimizationLevel: 'all',
       });
       console.log('[DepthEstimation] Using WebGPU execution provider');
     } catch (e) {
       console.warn('[DepthEstimation] WebGPU EP unavailable, falling back to WASM:', e);
-      this._session = await ort.InferenceSession.create(this._modelUrl, {
+      this._session = await ort.InferenceSession.create(modelBuf, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
       });
