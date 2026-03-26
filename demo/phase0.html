@@ -1,0 +1,979 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JOSH Phase 0 — Algorithm Demos</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1rem 2rem;
+      border-bottom: 1px solid #222;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; }
+    header .tag {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      background: #1a3a1a;
+      color: #4ade80;
+    }
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid #222;
+      overflow-x: auto;
+      padding: 0 1rem;
+    }
+    .tab-btn {
+      padding: 0.7rem 1.1rem;
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: #ccc; }
+    .tab-btn.active { color: #4ade80; border-bottom-color: #4ade80; }
+    .tab-panel { display: none; padding: 2rem; max-width: 900px; margin: 0 auto; }
+    .tab-panel.active { display: block; }
+
+    h2 { font-size: 1.05rem; font-weight: 600; color: #e0e0e0; margin-bottom: 0.5rem; }
+    .explanation {
+      background: #111;
+      border: 1px solid #1f2f1f;
+      border-left: 3px solid #4ade80;
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      font-size: 0.82rem;
+      color: #aaa;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+
+    .demo-area {
+      display: flex;
+      gap: 1.5rem;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    canvas {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 6px;
+      display: block;
+    }
+    .controls {
+      flex: 1;
+      min-width: 200px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.8rem;
+    }
+    button {
+      background: #1a3a1a;
+      color: #4ade80;
+      border: 1px solid #2a5a2a;
+      border-radius: 6px;
+      padding: 0.5rem 1.1rem;
+      font-size: 0.84rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: #254a25; }
+    button:active { background: #1a3a1a; }
+    .stat {
+      font-size: 0.82rem;
+      color: #888;
+    }
+    .stat span { color: #e0e0e0; font-weight: 600; }
+
+    label { font-size: 0.8rem; color: #999; display: block; margin-bottom: 0.25rem; }
+    input[type=range] {
+      width: 100%;
+      accent-color: #4ade80;
+    }
+    .slider-group { display: flex; flex-direction: column; gap: 0.2rem; }
+
+    /* Loss bars */
+    .loss-bar-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+      min-width: 280px;
+    }
+    .loss-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .loss-label {
+      width: 110px;
+      font-size: 0.78rem;
+      color: #aaa;
+      flex-shrink: 0;
+    }
+    .loss-bar-bg {
+      flex: 1;
+      height: 14px;
+      background: #1a1a1a;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .loss-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.1s;
+    }
+    .loss-val {
+      width: 50px;
+      font-size: 0.75rem;
+      color: #e0e0e0;
+      text-align: right;
+    }
+
+    /* Loss chart */
+    .chart-wrap { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
+    .chart-side { display: flex; flex-direction: column; gap: 0.8rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>JOSH Phase 0 — Algorithm Demos</h1>
+  <span class="tag">Phase 0</span>
+  <span class="tag" style="background:#1a1a3a;color:#818cf8;">Interactive</span>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showTab(0)">0A — GPU Adam</button>
+  <button class="tab-btn" onclick="showTab(1)">0B — SMPL Skeleton</button>
+  <button class="tab-btn" onclick="showTab(2)">0C — Loss Functions</button>
+  <button class="tab-btn" onclick="showTab(3)">0D — Gradient Heatmap</button>
+  <button class="tab-btn" onclick="showTab(4)">0E — Convergence</button>
+</div>
+
+<!-- ===================== TAB 0A ===================== -->
+<div class="tab-panel active" id="tab0">
+  <h2>Phase 0A — GPU Adam Optimizer</h2>
+  <div class="explanation">
+    Adam is a gradient descent optimizer used in machine learning. It learns "how big to step" for each parameter by tracking momentum (average direction) and variance (average step size²). Here f(x,y)=x²+4y² — the oval bowl — and the dot finds the minimum at (0,0). Phase 0A implements this in WebGPU so the GPU can run 700 iterations per frame without sending data back to the CPU.
+  </div>
+  <div class="demo-area">
+    <canvas id="adamCanvas" width="400" height="400"></canvas>
+    <div class="controls">
+      <button onclick="adamRun100()">Run 100 Steps</button>
+      <button onclick="adamReset()">Reset</button>
+      <div class="stat">Step: <span id="adamStep">0</span></div>
+      <div class="stat">Loss f(x,y): <span id="adamLoss">—</span></div>
+      <div class="stat">x: <span id="adamX">3.000</span></div>
+      <div class="stat">y: <span id="adamY">2.000</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TAB 0B ===================== -->
+<div class="tab-panel" id="tab1">
+  <h2>Phase 0B — SMPL Skeleton (Rodrigues FK)</h2>
+  <div class="explanation">
+    SMPL is a 3D human body model with 24 joints. Rodrigues converts "rotate 0.3 rad around the X axis" (axis-angle) into a 3×3 rotation matrix. Forward Kinematics (FK) chains rotations from root (pelvis) to leaves (hands, feet). Phase 0B implements this in WebGPU WGSL and also computes the analytical derivative dR/dω needed for backpropagation.
+  </div>
+  <div class="demo-area">
+    <canvas id="smplCanvas" width="400" height="400"></canvas>
+    <div class="controls">
+      <div class="slider-group">
+        <label>Spine bend (joint 3): <span id="spineVal">0.00</span></label>
+        <input type="range" id="spine" min="-1.2" max="1.2" step="0.01" value="0" oninput="smplUpdate()">
+      </div>
+      <div class="slider-group">
+        <label>Left arm (joint 16): <span id="larmVal">0.00</span></label>
+        <input type="range" id="larm" min="-1.57" max="1.57" step="0.01" value="0" oninput="smplUpdate()">
+      </div>
+      <div class="slider-group">
+        <label>Right arm (joint 17): <span id="rarmVal">0.00</span></label>
+        <input type="range" id="rarm" min="-1.57" max="1.57" step="0.01" value="0" oninput="smplUpdate()">
+      </div>
+      <div class="slider-group">
+        <label>Head tilt (joint 12): <span id="headVal">0.00</span></label>
+        <input type="range" id="head" min="-0.8" max="0.8" step="0.01" value="0" oninput="smplUpdate()">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TAB 0C ===================== -->
+<div class="tab-panel" id="tab2">
+  <h2>Phase 0C — Loss Functions</h2>
+  <div class="explanation">
+    Six loss functions penalise different types of "wrongness". L_p says "stay close to natural poses". L_smooth says "don't jitter between frames". L_3D says "the person should be where the depth sensor says". L_c1 says "feet should touch the floor". L_2D says "joints should project to where the camera saw them". Phase 0C implements all six as GPU compute shaders that run in parallel.
+  </div>
+  <div class="demo-area">
+    <div class="loss-bar-container" id="lossBars">
+      <!-- populated by JS -->
+    </div>
+    <div class="controls">
+      <div class="slider-group">
+        <label>Head height offset: <span id="headOffVal">0.00</span></label>
+        <input type="range" id="headOff" min="-0.5" max="0.5" step="0.01" value="0" oninput="lossUpdate()">
+      </div>
+      <div class="slider-group">
+        <label>Pose randomness: <span id="poseRandVal">0.00</span></label>
+        <input type="range" id="poseRand" min="0" max="1" step="0.01" value="0" oninput="lossUpdate()">
+      </div>
+      <div class="slider-group">
+        <label>Temporal motion: <span id="tempMotVal">0.00</span></label>
+        <input type="range" id="tempMot" min="0" max="1" step="0.01" value="0" oninput="lossUpdate()">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TAB 0D ===================== -->
+<div class="tab-panel" id="tab3">
+  <h2>Phase 0D — Gradient Heatmap (JVP)</h2>
+  <div class="explanation">
+    The chain rule converts "how much should vertex positions change?" into "how much should joint angles change?". This is the JVP (Jacobian-Vector Product). Phase 0D implements this as a WebGPU kernel that can compute all 72 gradients in parallel. Red = the optimizer needs to change this joint a lot; blue = this joint is already close to optimal.
+  </div>
+  <div class="demo-area">
+    <canvas id="gradCanvas" width="400" height="400"></canvas>
+    <div class="controls">
+      <div class="stat" style="font-size:0.79rem;color:#aaa;line-height:1.5;">
+        Blue skeleton = current (T-pose)<br>
+        Green skeleton = target (head raised)<br>
+        Joint color = gradient magnitude<br>Red = high, Blue = low
+      </div>
+      <div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.25rem;">
+        <div style="display:flex;gap:0.4rem;align-items:center;">
+          <div style="width:14px;height:14px;background:#3b82f6;border-radius:50%;"></div>
+          <span style="font-size:0.78rem;color:#aaa;">Current pose</span>
+        </div>
+        <div style="display:flex;gap:0.4rem;align-items:center;">
+          <div style="width:14px;height:14px;background:#4ade80;border-radius:50%;"></div>
+          <span style="font-size:0.78rem;color:#aaa;">Target pose</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TAB 0E ===================== -->
+<div class="tab-panel" id="tab4">
+  <h2>Phase 0E — Optimizer Convergence</h2>
+  <div class="explanation">
+    Phase 0E combines everything: the SMPL forward pass, all six loss functions, the JVP gradient, and Adam — and records all 700 iterations into a SINGLE GPU command. This means the CPU submits one batch job, the GPU works for ~10ms, then the CPU reads back the result. There is no back-and-forth between CPU and GPU during optimisation. The chart shows the loss curve: Stage 1 (iterations 0–500, lr=0.07) takes big steps, Stage 2 (500–700, lr=0.014) refines.
+  </div>
+  <div class="chart-wrap">
+    <div class="chart-side">
+      <canvas id="skelCanvas" width="220" height="340"></canvas>
+      <div style="display:flex;gap:1rem;font-size:0.77rem;color:#888;margin-top:0.3rem;">
+        <span><span style="color:#3b82f6;">■</span> Current</span>
+        <span><span style="color:#4ade80;">■</span> Target</span>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.8rem;flex:1;">
+      <canvas id="lossChart" width="400" height="260"></canvas>
+      <div style="display:flex;gap:0.8rem;flex-wrap:wrap;">
+        <button onclick="convStep()">+10 Steps</button>
+        <button onclick="convRun()">Run All 700</button>
+        <button onclick="convReset()">Reset</button>
+      </div>
+      <div class="stat">Iteration: <span id="convIter">0</span> / 700</div>
+      <div class="stat">Loss: <span id="convLoss">—</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// TABS
+// ─────────────────────────────────────────────────────────────────────────────
+function showTab(i) {
+  document.querySelectorAll('.tab-panel').forEach((p,j) => p.classList.toggle('active', i===j));
+  document.querySelectorAll('.tab-btn').forEach((b,j) => b.classList.toggle('active', i===j));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED MATH
+// ─────────────────────────────────────────────────────────────────────────────
+function rodrigues(wx, wy, wz) {
+  const eps = 1e-12;
+  const theta2 = wx*wx + wy*wy + wz*wz;
+  const theta  = Math.sqrt(theta2 + eps);
+  const s = Math.sin(theta) / (theta + eps);
+  const c = (1 - Math.cos(theta)) / (theta2 + eps);
+  return [
+    [1 + c*(-(wy*wy + wz*wz)), -s*wz + c*wx*wy,  s*wy + c*wx*wz],
+    [s*wz + c*wx*wy,  1 + c*(-(wx*wx + wz*wz)), -s*wx + c*wy*wz],
+    [-s*wy + c*wx*wz,  s*wx + c*wy*wz, 1 + c*(-(wx*wx + wy*wy))]
+  ];
+}
+
+function matVec(R, v) {
+  return [
+    R[0][0]*v[0] + R[0][1]*v[1] + R[0][2]*v[2],
+    R[1][0]*v[0] + R[1][1]*v[1] + R[1][2]*v[2],
+    R[2][0]*v[0] + R[2][1]*v[1] + R[2][2]*v[2]
+  ];
+}
+
+function matMat(A, B) {
+  const C = [[0,0,0],[0,0,0],[0,0,0]];
+  for (let i=0;i<3;i++) for (let j=0;j<3;j++) for (let k=0;k<3;k++) C[i][j]+=A[i][k]*B[k][j];
+  return C;
+}
+
+const PARENTS = [-1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19,20,21];
+
+const TPOSE = [
+  [0,0.9,0],[0.1,0.85,0],[-0.1,0.85,0],[0,1.05,0],
+  [0.1,0.45,0],[-0.1,0.45,0],[0,1.2,0],[0.1,0.05,0],
+  [-0.1,0.05,0],[0,1.35,0],[0.1,0,0.05],[-0.1,0,0.05],
+  [0,1.5,0],[0.1,1.45,0],[-0.1,1.45,0],[0,1.65,0],
+  [0.22,1.42,0],[-0.22,1.42,0],[0.45,1.42,0],[-0.45,1.42,0],
+  [0.65,1.42,0],[-0.65,1.42,0],[0.72,1.42,0],[-0.72,1.42,0]
+];
+
+// FK: thetas is array of 24 [wx,wy,wz] axis-angle vectors
+function runFK(thetas) {
+  const globalPos = new Array(24);
+  const globalRot = new Array(24);
+  for (let i=0;i<24;i++) {
+    const R = rodrigues(thetas[i][0], thetas[i][1], thetas[i][2]);
+    const p = TPOSE[i];
+    if (PARENTS[i] === -1) {
+      globalPos[i] = [...p];
+      globalRot[i] = R;
+    } else {
+      const par = PARENTS[i];
+      const localOffset = [p[0]-TPOSE[par][0], p[1]-TPOSE[par][1], p[2]-TPOSE[par][2]];
+      const rotOffset = matVec(globalRot[par], localOffset);
+      globalPos[i] = [
+        globalPos[par][0] + rotOffset[0],
+        globalPos[par][1] + rotOffset[1],
+        globalPos[par][2] + rotOffset[2]
+      ];
+      globalRot[i] = matMat(globalRot[par], R);
+    }
+  }
+  return globalPos;
+}
+
+const ZERO_THETAS = Array.from({length:24}, ()=>[0,0,0]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB 0A — ADAM OPTIMIZER
+// ─────────────────────────────────────────────────────────────────────────────
+(function(){
+  const canvas = document.getElementById('adamCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = 400, H = 400;
+
+  const lr=0.1, b1=0.9, b2=0.999, eps=1e-8;
+  let state;
+  let trail;
+
+  function reset() {
+    state = { x:3, y:2, mx:0, my:0, vx:0, vy:0, t:0 };
+    trail = [];
+    document.getElementById('adamStep').textContent = '0';
+    document.getElementById('adamLoss').textContent = '—';
+    document.getElementById('adamX').textContent = '3.000';
+    document.getElementById('adamY').textContent = '2.000';
+    draw();
+  }
+
+  // Map param space to canvas: center at (W/2,H/2), scale ~60px per unit
+  const SC = 55;
+  function toCanvas(x, y) {
+    return [W/2 + x*SC, H/2 - y*SC];
+  }
+
+  function drawContours(ctx) {
+    const cx = W/2, cy = H/2;
+    // draw colored circles for contour levels of x^2 + 4y^2 = k
+    // For each pixel, compute loss and color it
+    const img = ctx.createImageData(W, H);
+    for (let py=0;py<H;py++) {
+      for (let px=0;px<W;px++) {
+        const x = (px - W/2) / SC;
+        const y = -(py - H/2) / SC;
+        const loss = x*x + 4*y*y;
+        const t = Math.min(1, loss / 25);
+        // blue=low, cyan, green, yellow, red=high
+        let r,g,b;
+        if (t < 0.25) { const u=t/0.25; r=0; g=Math.round(u*180); b=Math.round(100+u*155); }
+        else if (t < 0.5) { const u=(t-0.25)/0.25; r=0; g=Math.round(180+u*75); b=Math.round(255-u*255); }
+        else if (t < 0.75) { const u=(t-0.5)/0.25; r=Math.round(u*255); g=255; b=0; }
+        else { const u=(t-0.75)/0.25; r=255; g=Math.round(255-u*200); b=0; }
+        const idx = (py*W+px)*4;
+        img.data[idx]   = r;
+        img.data[idx+1] = g;
+        img.data[idx+2] = b;
+        img.data[idx+3] = 40; // very transparent overlay
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    // grid
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 0.5;
+    for (let gx=-4;gx<=4;gx++) {
+      const cx2 = W/2 + gx*SC;
+      ctx.beginPath(); ctx.moveTo(cx2,0); ctx.lineTo(cx2,H); ctx.stroke();
+    }
+    for (let gy=-4;gy<=4;gy++) {
+      const cy2 = H/2 + gy*SC;
+      ctx.beginPath(); ctx.moveTo(0,cy2); ctx.lineTo(W,cy2); ctx.stroke();
+    }
+    // axes
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W/2,0); ctx.lineTo(W/2,H); ctx.stroke();
+    // origin marker
+    ctx.fillStyle = '#4ade80'; ctx.beginPath(); ctx.arc(W/2,H/2,4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#aaa'; ctx.font='11px monospace'; ctx.fillText('(0,0)',W/2+6,H/2-6);
+  }
+
+  function draw() {
+    ctx.fillStyle = '#111'; ctx.fillRect(0,0,W,H);
+    drawContours(ctx);
+
+    // draw trail
+    if (trail.length > 1) {
+      ctx.strokeStyle = 'rgba(250,200,50,0.35)'; ctx.lineWidth=1.5;
+      ctx.beginPath();
+      const [sx,sy] = toCanvas(trail[0][0], trail[0][1]);
+      ctx.moveTo(sx,sy);
+      for (let i=1;i<trail.length;i++) {
+        const [tx,ty] = toCanvas(trail[i][0], trail[i][1]);
+        ctx.lineTo(tx,ty);
+      }
+      ctx.stroke();
+    }
+
+    // draw dot
+    const [cx,cy] = toCanvas(state.x, state.y);
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath(); ctx.arc(cx,cy,7,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(cx,cy,7,0,Math.PI*2); ctx.stroke();
+  }
+
+  window.adamRun100 = function() {
+    for (let i=0;i<100;i++) {
+      state.t++;
+      const gx = 2*state.x;
+      const gy = 8*state.y;
+      state.mx = b1*state.mx + (1-b1)*gx;
+      state.my = b1*state.my + (1-b1)*gy;
+      state.vx = b2*state.vx + (1-b2)*gx*gx;
+      state.vy = b2*state.vy + (1-b2)*gy*gy;
+      const mhx = state.mx / (1 - Math.pow(b1, state.t));
+      const mhy = state.my / (1 - Math.pow(b1, state.t));
+      const vhx = state.vx / (1 - Math.pow(b2, state.t));
+      const vhy = state.vy / (1 - Math.pow(b2, state.t));
+      state.x -= lr * mhx / (Math.sqrt(vhx) + eps);
+      state.y -= lr * mhy / (Math.sqrt(vhy) + eps);
+      if (i % 5 === 0) trail.push([state.x, state.y]);
+    }
+    const loss = state.x*state.x + 4*state.y*state.y;
+    document.getElementById('adamStep').textContent = state.t;
+    document.getElementById('adamLoss').textContent = loss.toFixed(6);
+    document.getElementById('adamX').textContent = state.x.toFixed(6);
+    document.getElementById('adamY').textContent = state.y.toFixed(6);
+    draw();
+  };
+
+  window.adamReset = reset;
+  reset();
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB 0B — SMPL SKELETON
+// ─────────────────────────────────────────────────────────────────────────────
+(function(){
+  const canvas = document.getElementById('smplCanvas');
+  const ctx = canvas.getContext('2d');
+  const W=400, H=400;
+
+  function getThetas() {
+    const s = parseFloat(document.getElementById('spine').value);
+    const la = parseFloat(document.getElementById('larm').value);
+    const ra = parseFloat(document.getElementById('rarm').value);
+    const hd = parseFloat(document.getElementById('head').value);
+    const th = Array.from({length:24}, ()=>[0,0,0]);
+    th[3]  = [s, 0, 0];    // spine bend (X)
+    th[16] = [0, 0, -la];  // left arm (Z)
+    th[17] = [0, 0, ra];   // right arm (Z)
+    th[12] = [hd, 0, 0];   // head tilt (X)
+    return th;
+  }
+
+  function drawSkeleton(ctx, joints, jColor, bColor) {
+    // scale: y range roughly 0-1.8m, center on canvas
+    const SC = 180, OX = W/2, OY = H - 30;
+    function proj(j) {
+      return [OX + joints[j][0]*SC, OY - joints[j][1]*SC];
+    }
+    // bones
+    ctx.strokeStyle = bColor || '#555'; ctx.lineWidth=2;
+    for (let i=1;i<24;i++) {
+      const [x1,y1] = proj(i);
+      const [x2,y2] = proj(PARENTS[i]);
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    }
+    // joints
+    for (let i=0;i<24;i++) {
+      const [x,y] = proj(i);
+      ctx.fillStyle = jColor || '#aaa';
+      ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  function draw() {
+    ctx.fillStyle='#111'; ctx.fillRect(0,0,W,H);
+    // grid
+    ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=1;
+    for (let gx=0;gx<W;gx+=40) { ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
+    for (let gy=0;gy<H;gy+=40) { ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
+
+    const thetas = getThetas();
+    const joints = runFK(thetas);
+    drawSkeleton(ctx, joints, '#93c5fd', '#3b82f6');
+  }
+
+  window.smplUpdate = function() {
+    document.getElementById('spineVal').textContent = parseFloat(document.getElementById('spine').value).toFixed(2);
+    document.getElementById('larmVal').textContent  = parseFloat(document.getElementById('larm').value).toFixed(2);
+    document.getElementById('rarmVal').textContent  = parseFloat(document.getElementById('rarm').value).toFixed(2);
+    document.getElementById('headVal').textContent  = parseFloat(document.getElementById('head').value).toFixed(2);
+    draw();
+  };
+
+  draw();
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB 0C — LOSS FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+(function(){
+  const LOSSES = [
+    { id:'lp',     label:'L_p (Prior)',     icon:'📐', max:5  },
+    { id:'lsmooth',label:'L_smooth (Temp)', icon:'📈', max:5  },
+    { id:'l3d',    label:'L_3D (Depth)',    icon:'📏', max:2  },
+    { id:'lc1',    label:'L_c1 (Contact)',  icon:'👣', max:2  },
+    { id:'l2d',    label:'L_2D (Keypoint)',  icon:'📷', max:8  },
+  ];
+
+  const container = document.getElementById('lossBars');
+  LOSSES.forEach(l => {
+    const row = document.createElement('div');
+    row.className = 'loss-row';
+    row.innerHTML = `
+      <div class="loss-label">${l.icon} ${l.label}</div>
+      <div class="loss-bar-bg">
+        <div class="loss-bar-fill" id="bar_${l.id}" style="width:0%;background:hsl(220,80%,55%)"></div>
+      </div>
+      <div class="loss-val" id="val_${l.id}">0.000</div>
+    `;
+    container.appendChild(row);
+  });
+
+  function lossColor(t) {
+    // t in [0,1]: blue=0, red=1
+    const h = Math.round(220 - t*220);
+    return `hsl(${h},80%,55%)`;
+  }
+
+  window.lossUpdate = function() {
+    const headOff  = parseFloat(document.getElementById('headOff').value);
+    const poseRand = parseFloat(document.getElementById('poseRand').value);
+    const tempMot  = parseFloat(document.getElementById('tempMot').value);
+
+    document.getElementById('headOffVal').textContent  = headOff.toFixed(2);
+    document.getElementById('poseRandVal').textContent = poseRand.toFixed(2);
+    document.getElementById('tempMotVal').textContent  = tempMot.toFixed(2);
+
+    // L_p: sum of squared deviations from zero (grows with pose randomness)
+    const lp = 0.1 * (24 * poseRand * poseRand * 3);
+
+    // L_smooth: grows with temporal motion
+    const lsmooth = 0.05 * (24 * tempMot * tempMot * 3);
+
+    // L_3D: simulated depth error based on head offset
+    const l3d = Math.abs(headOff) * 1.5;
+
+    // L_c1: contact loss (foot lifted from ground)
+    // foot_y increases when pose randomness high and head moves up
+    const foot_lift = Math.max(0, poseRand * 0.3 + headOff * 0.2);
+    const lc1 = foot_lift * foot_lift * 10;
+
+    // L_2D: keypoint reprojection error grows with pose randomness
+    const l2d = 2.5 * poseRand * poseRand * 24;
+
+    const vals = [lp, lsmooth, l3d, lc1, l2d];
+    LOSSES.forEach((l, i) => {
+      const v = vals[i];
+      const t = Math.min(1, v / l.max);
+      const bar = document.getElementById('bar_'+l.id);
+      bar.style.width = (t*100).toFixed(1)+'%';
+      bar.style.background = lossColor(t);
+      document.getElementById('val_'+l.id).textContent = v.toFixed(3);
+    });
+  };
+
+  lossUpdate();
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB 0D — GRADIENT HEATMAP
+// ─────────────────────────────────────────────────────────────────────────────
+(function(){
+  const canvas = document.getElementById('gradCanvas');
+  const ctx = canvas.getContext('2d');
+  const W=400, H=400;
+
+  // Rodrigues derivative: dR/d(omega_axis)
+  function rodriguesDeriv(wx,wy,wz,axis) {
+    const eps=1e-12;
+    const theta2=wx*wx+wy*wy+wz*wz;
+    const theta=Math.sqrt(theta2+eps);
+    const s=Math.sin(theta)/(theta+eps);
+    const c=(1-Math.cos(theta))/(theta2+eps);
+    const ds_dt=(theta*Math.cos(theta)-Math.sin(theta))/(theta2+eps);
+    const dc_dt=(theta*Math.sin(theta)-2*(1-Math.cos(theta)))/(theta2*theta+eps);
+    const wi=[wx,wy,wz][axis];
+    const e=[axis===0?1:0, axis===1?1:0, axis===2?1:0];
+    // K(omega) = [[0,-wz,wy],[wz,0,-wx],[-wy,wx,0]]
+    // K^2 = [[-(wy^2+wz^2), wx*wy, wx*wz],[wx*wy,-(wx^2+wz^2),wy*wz],[wx*wz,wy*wz,-(wx^2+wy^2)]]
+    // dR = (ds_dt*wi/theta)*K + s*dK + (dc_dt*wi/theta)*K^2 + c*dK^2
+    const cs = wi===0 ? 0 : ds_dt*wi/theta;
+    const cc = wi===0 ? 0 : dc_dt*wi/theta;
+    const K=[[0,-wz,wy],[wz,0,-wx],[-wy,wx,0]];
+    const K2=[
+      [-(wy*wy+wz*wz), wx*wy, wx*wz],
+      [wx*wy, -(wx*wx+wz*wz), wy*wz],
+      [wx*wz, wy*wz, -(wx*wx+wy*wy)]
+    ];
+    // dK/d(wi): derivative of K w.r.t. axis
+    const dK=[[[0,0,0],[0,0,0],[0,0,0]],[[0,0,0],[0,0,0],[0,0,0]],[[0,0,0],[0,0,0],[0,0,0]]];
+    // dK for axis=0 (x): dK/dx = [[0,0,0],[0,0,-1],[0,1,0]]
+    // dK for axis=1 (y): dK/dy = [[0,0,1],[0,0,0],[-1,0,0]]
+    // dK for axis=2 (z): dK/dz = [[0,-1,0],[1,0,0],[0,0,0]]
+    if(axis===0){dK[1][2]=-1;dK[2][1]=1;}
+    else if(axis===1){dK[0][2]=1;dK[2][0]=-1;}
+    else{dK[0][1]=-1;dK[1][0]=1;}
+    // dK2 is trickier; approximate numerically for visual purposes
+    // For magnitude estimation, just compute norm of K-based terms
+    const dR=[[0,0,0],[0,0,0],[0,0,0]];
+    for(let i=0;i<3;i++) for(let j=0;j<3;j++) {
+      dR[i][j] = cs*K[i][j] + s*dK[i][j] + cc*K2[i][j];
+    }
+    // Frobenius norm as gradient magnitude proxy
+    let norm=0;
+    for(let i=0;i<3;i++) for(let j=0;j<3;j++) norm+=dR[i][j]*dR[i][j];
+    return Math.sqrt(norm);
+  }
+
+  // Current: T-pose, Target: head raised (joint 12 rotated back)
+  const targetThetas = Array.from({length:24}, ()=>[0,0,0]);
+  targetThetas[12] = [-0.5, 0, 0]; // head tilted back
+  targetThetas[9]  = [0.2, 0, 0];  // upper spine
+
+  const currentJoints = runFK(ZERO_THETAS);
+  const targetJoints  = runFK(targetThetas);
+
+  // Compute gradient magnitude per joint: |dR/dw| summed over 3 axes
+  function computeGradMagnitudes(thetas, target) {
+    const joints = runFK(thetas);
+    return joints.map((jp, i) => {
+      const diff = [jp[0]-target[i][0], jp[1]-target[i][1], jp[2]-target[i][2]];
+      const posDiff = Math.sqrt(diff[0]*diff[0]+diff[1]*diff[1]+diff[2]*diff[2]);
+      const [wx,wy,wz]=thetas[i];
+      const g0=rodriguesDeriv(wx,wy,wz,0);
+      const g1=rodriguesDeriv(wx,wy,wz,1);
+      const g2=rodriguesDeriv(wx,wy,wz,2);
+      return (g0+g1+g2) * posDiff;
+    });
+  }
+
+  function hotColor(t) {
+    // 0=blue, 0.5=yellow, 1=red
+    if(t<0.333){const u=t/0.333;return`rgb(${Math.round(u*50)},${Math.round(u*50)},${Math.round(200-u*100)})`;}
+    if(t<0.667){const u=(t-0.333)/0.333;return`rgb(${Math.round(50+u*200)},${Math.round(50+u*180)},${Math.round(100-u*100)})`;}
+    const u=(t-0.667)/0.333;return`rgb(255,${Math.round(230-u*200)},${Math.round(u*20)})`;
+  }
+
+  function drawSkeletonGrad(joints, gradMags, maxGrad) {
+    const SC=155, OX=W/2, OY=H-20;
+    function proj(j){return[OX+joints[j][0]*SC, OY-joints[j][1]*SC];}
+    // bones
+    ctx.strokeStyle='rgba(100,100,100,0.4)'; ctx.lineWidth=1.5;
+    for(let i=1;i<24;i++){
+      const [x1,y1]=proj(i); const [x2,y2]=proj(PARENTS[i]);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    }
+    // joints colored by gradient
+    for(let i=0;i<24;i++){
+      const [x,y]=proj(i);
+      const t=Math.min(1,(gradMags[i]||0)/maxGrad);
+      ctx.fillStyle=hotColor(t);
+      ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,0.2)';ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.stroke();
+    }
+  }
+
+  function drawTargetSkel(joints) {
+    const SC=155, OX=W/2, OY=H-20;
+    function proj(j){return[OX+joints[j][0]*SC, OY-joints[j][1]*SC];}
+    ctx.strokeStyle='rgba(74,222,128,0.3)'; ctx.lineWidth=1.5;
+    for(let i=1;i<24;i++){
+      const [x1,y1]=proj(i); const [x2,y2]=proj(PARENTS[i]);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    }
+    for(let i=0;i<24;i++){
+      const [x,y]=proj(i);
+      ctx.fillStyle='rgba(74,222,128,0.5)';
+      ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();
+    }
+  }
+
+  // Colorbar legend
+  function drawColorbar() {
+    const bx=W-30, by=60, bh=200, bw=14;
+    const grad=ctx.createLinearGradient(0,by,0,by+bh);
+    grad.addColorStop(0,'rgb(255,30,0)');
+    grad.addColorStop(0.5,'rgb(250,230,50)');
+    grad.addColorStop(1,'rgb(0,0,200)');
+    ctx.fillStyle=grad; ctx.fillRect(bx,by,bw,bh);
+    ctx.strokeStyle='#444'; ctx.lineWidth=1; ctx.strokeRect(bx,by,bw,bh);
+    ctx.fillStyle='#aaa'; ctx.font='9px monospace';
+    ctx.fillText('high',bx-2,by-4);
+    ctx.fillText('low',bx-1,by+bh+11);
+  }
+
+  function draw() {
+    ctx.fillStyle='#111'; ctx.fillRect(0,0,W,H);
+    ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=1;
+    for(let gx=0;gx<W;gx+=40){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+    for(let gy=0;gy<H;gy+=40){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+
+    const grads = computeGradMagnitudes(ZERO_THETAS, targetJoints);
+    const maxGrad = Math.max(...grads, 0.001);
+
+    drawTargetSkel(targetJoints);
+    drawSkeletonGrad(currentJoints, grads, maxGrad);
+    drawColorbar();
+
+    ctx.fillStyle='#888'; ctx.font='11px system-ui';
+    ctx.fillText('Gradient magnitude per joint',10,20);
+  }
+
+  draw();
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB 0E — OPTIMIZER CONVERGENCE
+// ─────────────────────────────────────────────────────────────────────────────
+(function(){
+  const skelCanvas  = document.getElementById('skelCanvas');
+  const skelCtx     = skelCanvas.getContext('2d');
+  const chartCanvas = document.getElementById('lossChart');
+  const chartCtx    = chartCanvas.getContext('2d');
+  const SW=220, SH=340, CW=400, CH=260;
+
+  // Target: arms raised 45° (approx 0.785 rad)
+  const targetThetas = Array.from({length:24},()=>[0,0,0]);
+  targetThetas[16] = [0, 0, -0.785]; // left arm up
+  targetThetas[17] = [0, 0,  0.785]; // right arm up
+
+  const targetJoints = runFK(targetThetas);
+
+  // State
+  let thetas, adam, lossHistory, iter;
+
+  function initAdam() {
+    thetas = Array.from({length:24},()=>[0,0,0]);
+    adam = {
+      m: Array.from({length:24},()=>[0,0,0]),
+      v: Array.from({length:24},()=>[0,0,0]),
+      t: 0
+    };
+    lossHistory = [];
+    iter = 0;
+  }
+
+  function computeLoss() {
+    const j = runFK(thetas);
+    let loss = 0;
+    for(let i=0;i<24;i++){
+      const dx=j[i][0]-targetJoints[i][0];
+      const dy=j[i][1]-targetJoints[i][1];
+      const dz=j[i][2]-targetJoints[i][2];
+      loss += dx*dx+dy*dy+dz*dz;
+    }
+    return loss;
+  }
+
+  const EPS=1e-8, b1=0.9, b2=0.999;
+
+  function adamStep(n) {
+    for(let step=0;step<n && iter<700;step++, iter++) {
+      adam.t++;
+      const lr = iter < 500 ? 0.07 : 0.014;
+      // Numerical gradient
+      const h=1e-4;
+      for(let ji=0;ji<24;ji++) {
+        for(let ax=0;ax<3;ax++) {
+          thetas[ji][ax]+=h;
+          const lp=computeLoss();
+          thetas[ji][ax]-=2*h;
+          const lm=computeLoss();
+          thetas[ji][ax]+=h;
+          const g=(lp-lm)/(2*h);
+          adam.m[ji][ax]=b1*adam.m[ji][ax]+(1-b1)*g;
+          adam.v[ji][ax]=b2*adam.v[ji][ax]+(1-b2)*g*g;
+          const mh=adam.m[ji][ax]/(1-Math.pow(b1,adam.t));
+          const vh=adam.v[ji][ax]/(1-Math.pow(b2,adam.t));
+          thetas[ji][ax]-=lr*mh/(Math.sqrt(vh)+EPS);
+        }
+      }
+      lossHistory.push(computeLoss());
+    }
+  }
+
+  function drawSkel(ctx, joints, W, H, color, lineColor) {
+    const SC=100, OX=W/2, OY=H-20;
+    function proj(j){return[OX+joints[j][0]*SC, OY-joints[j][1]*SC];}
+    ctx.strokeStyle=lineColor; ctx.lineWidth=1.5;
+    for(let i=1;i<24;i++){
+      const [x1,y1]=proj(i); const [x2,y2]=proj(PARENTS[i]);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    }
+    for(let i=0;i<24;i++){
+      const [x,y]=proj(i);
+      ctx.fillStyle=color;
+      ctx.beginPath();ctx.arc(x,y,3.5,0,Math.PI*2);ctx.fill();
+    }
+  }
+
+  function drawSkeletons() {
+    skelCtx.fillStyle='#111'; skelCtx.fillRect(0,0,SW,SH);
+    skelCtx.strokeStyle='#1a1a1a'; skelCtx.lineWidth=1;
+    for(let gx=0;gx<SW;gx+=30){skelCtx.beginPath();skelCtx.moveTo(gx,0);skelCtx.lineTo(gx,SH);skelCtx.stroke();}
+    for(let gy=0;gy<SH;gy+=30){skelCtx.beginPath();skelCtx.moveTo(0,gy);skelCtx.lineTo(SW,gy);skelCtx.stroke();}
+    drawSkel(skelCtx, targetJoints, SW, SH, 'rgba(74,222,128,0.6)', 'rgba(74,222,128,0.3)');
+    const curJoints = runFK(thetas);
+    drawSkel(skelCtx, curJoints, SW, SH, '#93c5fd', '#3b82f6');
+  }
+
+  function drawChart() {
+    chartCtx.fillStyle='#111'; chartCtx.fillRect(0,0,CW,CH);
+    // grid
+    chartCtx.strokeStyle='#1a1a1a'; chartCtx.lineWidth=1;
+    for(let gx=0;gx<CW;gx+=40){chartCtx.beginPath();chartCtx.moveTo(gx,0);chartCtx.lineTo(gx,CH);chartCtx.stroke();}
+    for(let gy=0;gy<CH;gy+=30){chartCtx.beginPath();chartCtx.moveTo(0,gy);chartCtx.lineTo(CW,gy);chartCtx.stroke();}
+
+    if(lossHistory.length < 2) {
+      chartCtx.fillStyle='#555'; chartCtx.font='13px system-ui';
+      chartCtx.fillText('Click "Run All 700" or "+10 Steps"', 60, CH/2);
+      return;
+    }
+    // axes labels
+    chartCtx.fillStyle='#555'; chartCtx.font='10px monospace';
+    chartCtx.fillText('Loss (log scale)',5,14);
+    chartCtx.fillText('Iteration →',CW-80,CH-5);
+
+    // Stage divider
+    const stageX = Math.round((500/700)*(CW-40))+20;
+    chartCtx.strokeStyle='rgba(250,200,50,0.3)'; chartCtx.lineWidth=1; chartCtx.setLineDash([4,4]);
+    chartCtx.beginPath();chartCtx.moveTo(stageX,0);chartCtx.lineTo(stageX,CH);chartCtx.stroke();
+    chartCtx.setLineDash([]);
+    chartCtx.fillStyle='rgba(250,200,50,0.6)'; chartCtx.font='9px monospace';
+    chartCtx.fillText('lr=0.014',stageX+3,15);
+    chartCtx.fillStyle='rgba(250,200,50,0.5)';
+    chartCtx.fillText('lr=0.07',5,15);
+
+    const maxLoss = Math.max(...lossHistory);
+    const minLoss = Math.min(...lossHistory, 1e-6);
+    const logMax = Math.log(maxLoss+1e-6);
+    const logMin = Math.log(minLoss);
+
+    const pad={l:20,r:20,t:20,b:20};
+    const pw=CW-pad.l-pad.r, ph=CH-pad.t-pad.b;
+
+    function toXY(i, loss) {
+      const x = pad.l + (i/700)*pw;
+      const logL = Math.log(Math.max(loss,1e-8));
+      const y = pad.t + ph*(1-(logL-logMin)/(logMax-logMin+1e-12));
+      return [x, y];
+    }
+
+    // loss curve
+    chartCtx.strokeStyle='#4ade80'; chartCtx.lineWidth=1.5;
+    chartCtx.beginPath();
+    lossHistory.forEach((l,i)=>{
+      const [x,y]=toXY(i,l);
+      i===0 ? chartCtx.moveTo(x,y) : chartCtx.lineTo(x,y);
+    });
+    chartCtx.stroke();
+
+    // current point
+    if(lossHistory.length>0){
+      const [cx,cy]=toXY(lossHistory.length-1, lossHistory[lossHistory.length-1]);
+      chartCtx.fillStyle='#facc15';
+      chartCtx.beginPath();chartCtx.arc(cx,cy,4,0,Math.PI*2);chartCtx.fill();
+    }
+  }
+
+  function updateUI() {
+    document.getElementById('convIter').textContent = iter;
+    const loss = lossHistory.length ? lossHistory[lossHistory.length-1] : null;
+    document.getElementById('convLoss').textContent = loss != null ? loss.toFixed(6) : '—';
+    drawSkeletons();
+    drawChart();
+  }
+
+  window.convStep = function() {
+    adamStep(10);
+    updateUI();
+  };
+
+  let running=false;
+  window.convRun = async function() {
+    if(running) return;
+    running=true;
+    // Run in chunks to allow browser to breathe
+    while(iter<700){
+      adamStep(25);
+      updateUI();
+      await new Promise(r=>setTimeout(r,0));
+    }
+    running=false;
+  };
+
+  window.convReset = function() {
+    running=false;
+    initAdam();
+    updateUI();
+  };
+
+  initAdam();
+  updateUI();
+})();
+</script>
+</body>
+</html>
