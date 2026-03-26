@@ -2,20 +2,18 @@
  * Phase 2B: Batch Pipeline Orchestrator
  *
  * Processes a full video through the JOSH pipeline in 100-frame chunks.
- * Each chunk goes through phases A–I sequentially.  All model-dependent
- * phases (MASt3R, ROMP, JOSH optimiser) are stubs — they return null /
- * zeroes so the pipeline is fully runnable without ONNX models loaded.
+ * Each chunk goes through phases A–I sequentially.
  *
  * Phases per chunk
  * ─────────────────
  *  A  Extract frames at 5 FPS           (FrameExtractor)
  *  B  Foreground segmentation           (SegmentationNode — BodyPix / HSV fallback)
- *  C  MASt3R dense matching             (STUB — returns null pointmaps)
- *  D  Focal-length recovery             (one-time, first chunk only)
- *  E  ROMP SMPL initialisation          (STUB — returns null)
+ *  C  MASt3R dense matching             (MASt3RNode — null pointmaps when model absent)
+ *  D  Focal-length recovery             (recoverFocalLength — config defaults when no pointmaps)
+ *  E  ROMP SMPL initialisation          (STUB — null until ROMPNode is wired in)
  *  F  MoveNet 2D pose                   (Pose2DNode)
  *  G  Contact detection                 (detectContacts)
- *  H  JOSH optimisation (700 iters)     (STUB — returns zero params)
+ *  H  JOSH optimisation (700 iters)     (STUB — returns zero/seeded params)
  *  I  Keyframe interpolation            (for non-keyframe frames)
  */
 
@@ -27,7 +25,6 @@ import { Pose2DNode, type Keypoint2D } from '../nodes/pose-2d.node.ts';
 import { detectContacts, type ContactResult } from '../utils/contact-detection.ts';
 import { MASt3RNode, type MASt3ROutput } from '../nodes/mast3r.node.ts';
 import { recoverFocalLength } from '../utils/focal-recovery.ts';
-import { ROMPNode } from '../nodes/romp.node.ts';
 
 // ---------------------------------------------------------------------------
 // Re-export the cache result type so callers can import it from one place
@@ -114,18 +111,12 @@ async function hashVideoUrl(url: string): Promise<string> {
 // STUB helpers — clearly marked for future replacement
 // ---------------------------------------------------------------------------
 
-// NOTE: Phase C (MASt3R) and Phase D (focal recovery) no longer use stubs.
-// MASt3RNode is used directly in the pipeline (see BatchPipeline._mast3r).
-// recoverFocalLength() is called in Phase D when point-map data is available.
-
-
 /**
  * STUB: replace with real WASM solver
  * JOSH gradient-based optimiser (700 iterations: 500 stage-1 + 200 stage-2).
  *
- * When frameCtx.smplInit is non-null (from ROMP), it seeds the initial params
- * buffer with pose[0..71] and betas[72..81] before the fake optimisation loop.
- * The real solver will use this as a warm-start rather than zeros.
+ * When frameCtx.smplInit is non-null (from ROMP), seeds the param buffer
+ * with pose[0..71] and betas[72..81] as a warm-start for the real solver.
  */
 async function stubJoshOptimize(
   frameCtx: FrameContext,
@@ -134,22 +125,15 @@ async function stubJoshOptimize(
   onIter: (iterIndex: number, loss: number) => void,
   signal: AbortSignal | undefined,
 ): Promise<Float32Array> {
-  // Seed from ROMP initialisation when available.
-  // params layout: [0..71] pose, [72..81] betas, [82..84] global trans,
-  //                [85..87] global orient, [88] scale σ
   const params = new Float32Array(JOSH_CONFIG.paramDim); // zeros
   if (frameCtx.smplInit !== null) {
-    // smplInit is a Float32Array[89] from ROMPNode (pose then betas).
-    // Copy pose [0..71] and betas [72..81] directly.
-    params.set(frameCtx.smplInit.subarray(0, 82), 0);
+    params.set(frameCtx.smplInit.subarray(0, Math.min(82, frameCtx.smplInit.length)), 0);
   }
 
-  // STUB optimisation: simulate iteration progress with a decaying fake loss.
   for (let i = 0; i < totalIters; i++) {
     if (signal?.aborted) break;
     const fakeLoss = 10.0 * Math.exp(-i / (totalIters * 0.4));
     onIter(i, fakeLoss);
-    // Yield to the event loop every 50 iterations to keep UI responsive.
     if (i % 50 === 0) {
       await new Promise<void>((r) => setTimeout(r, 0));
     }
@@ -180,19 +164,13 @@ export class BatchPipeline {
   private readonly _extractor = new FrameExtractor();
   private readonly _segmentation = new SegmentationNode();
   private readonly _pose2d = new Pose2DNode();
+
   /**
-   * MASt3RNode is created lazily and may remain null if the model file is not
-   * present on the server.  All Phase C / Phase D code gracefully degrades
-   * when this is null.
+   * MASt3RNode is created lazily on first process() call.
+   * Remains null if the model file is absent — Phase C/D degrade gracefully.
    */
   private _mast3r: MASt3RNode | null = null;
-  /**
-   * ROMPNode for Phase E SMPL initialisation.
-   * Loaded lazily on first use; remains null / unloaded when the model file is
-   * absent.  Phase E degrades gracefully (smplInit stays null).
-   */
-  private readonly _romp = new ROMPNode('/models/romp-bev-fp32.onnx');
-  private _rompInitialized = false;
+  private _mast3rInitialized = false;
 
   private _segInitialized = false;
   private _poseInitialized = false;
@@ -291,7 +269,6 @@ export class BatchPipeline {
         const ctx = frameContexts[i]!;
         const globalIdx = chunkStart + i;
 
-        // Skip if already cached
         if (await cache.hasFrame(globalIdx)) {
           cachedFrames++;
           this._emit({
@@ -316,7 +293,10 @@ export class BatchPipeline {
 
       if (signal?.aborted) break;
 
-      // ---- Phase C: MASt3R (stub) -----------------------------------------
+      // ---- Phase C: MASt3R dense matching ----------------------------------
+      // Process consecutive pairs (frame i, frame i+1) to obtain stereo
+      // point maps.  When _mast3r is null this is a no-op and pointmap stays
+      // null — downstream phases degrade gracefully.
       for (let i = 0; i < frameContexts.length; i++) {
         if (signal?.aborted) break;
         const ctx = frameContexts[i]!;
@@ -324,7 +304,26 @@ export class BatchPipeline {
 
         if (ctx.segmentation === null) continue; // already cached
 
-        ctx.pointmap = stubMast3r(ctx.frame); // STUB: replace with real model
+        if (this._mast3r !== null && ctx.pointmap === null) {
+          try {
+            const nextCtx = frameContexts[i + 1] ?? ctx;
+            const output = await this._mast3r.process(
+              ctx.frame.imageData,
+              nextCtx.frame.imageData,
+            );
+            ctx.mast3rOutput = output;
+            ctx.pointmap = output.pts3d_1;
+
+            // Propagate pts3d_2 so next frame avoids a redundant forward pass
+            if (i + 1 < frameContexts.length && frameContexts[i + 1]!.pointmap === null) {
+              frameContexts[i + 1]!.pointmap = output.pts3d_2;
+            }
+          } catch (e) {
+            console.warn(`[BatchPipeline] MASt3R failed for frame ${globalIdx}:`, e);
+            ctx.pointmap = null;
+          }
+        }
+
         this._emit({
           phase: 'mast3r',
           frameIndex: globalIdx,
@@ -338,10 +337,36 @@ export class BatchPipeline {
 
       // ---- Phase D: Focal-length recovery (first chunk only) ---------------
       if (!focalRecovered) {
-        const pointmaps = frameContexts.map((c) => c.pointmap);
-        camera = stubFocalRecovery(pointmaps); // STUB: replace with real model
+        const validPointmaps = frameContexts
+          .filter((c) => c.pointmap !== null)
+          .map((c) => c.pointmap!);
+
+        if (validPointmaps.length > 0) {
+          const pm = validPointmaps[0]!;
+          const pmW = 512; // MASt3R canonical resolution
+          const nPts = pm.length / 3;
+          const pmH = nPts / pmW;
+
+          const points2D = new Float32Array(nPts * 2);
+          for (let pi = 0; pi < nPts; pi++) {
+            points2D[pi * 2]     = pi % pmW;
+            points2D[pi * 2 + 1] = Math.floor(pi / pmW);
+          }
+
+          try {
+            const result = recoverFocalLength(pm, points2D, pmW, pmH);
+            const f = result.focalLength;
+            camera = { fx: f, fy: f, cx: pmW / 2, cy: pmH / 2 };
+            console.log(
+              `[BatchPipeline] Focal recovery: f=${f.toFixed(1)}px ` +
+              `reprojErr=${result.reprojectionError.toFixed(2)}px`,
+            );
+          } catch (e) {
+            console.warn('[BatchPipeline] Focal recovery failed, using config defaults:', e);
+          }
+        }
+
         focalRecovered = true;
-        // Emit once for the first frame of this chunk
         this._emit({
           phase: 'focal',
           frameIndex: chunkStart,
@@ -351,11 +376,7 @@ export class BatchPipeline {
         });
       }
 
-      // ---- Phase E: ROMP SMPL initialisation ---------------------------------
-      // Attempt to lazy-load the ROMP model on first chunk.  Failures are
-      // non-fatal — smplInit remains null and the optimiser starts from zeros.
-      await this._ensureRompInit();
-
+      // ---- Phase E: ROMP SMPL initialisation (stub) -----------------------
       for (let i = 0; i < frameContexts.length; i++) {
         if (signal?.aborted) break;
         const ctx = frameContexts[i]!;
@@ -363,7 +384,8 @@ export class BatchPipeline {
 
         if (ctx.segmentation === null) continue; // already cached
 
-        ctx.smplInit = await this._runRomp(ctx.frame);
+        // STUB: ctx.smplInit remains null until ROMPNode is wired in.
+        void ctx; // suppress unused-variable lint
         this._emit({
           phase: 'romp',
           frameIndex: globalIdx,
@@ -404,15 +426,11 @@ export class BatchPipeline {
 
         if (ctx.segmentation === null || ctx.pose2d === null) continue;
 
-        // We don't yet have real SMPL vertices (that requires phase H output),
-        // so we run contact detection with a placeholder zero-vertex array.
-        // The real pipeline would use posed vertices from the SMPL forward pass.
         const placeholderVertices = new Float32Array(JOSH_CONFIG.smplVertexCount * 3);
-        // Foot-sole vertex indices (approximate from SMPL topology).
         const footSoleIndices = [3216, 3226, 3387, 6617, 6624, 6787];
         const depthWidth = JOSH_CONFIG.depthMapSize;
         const depthHeight = JOSH_CONFIG.depthMapSize;
-        const dummyDepthMap = new Float32Array(depthWidth * depthHeight); // zeros
+        const dummyDepthMap = new Float32Array(depthWidth * depthHeight);
 
         ctx.contact = detectContacts(
           placeholderVertices,
@@ -452,7 +470,7 @@ export class BatchPipeline {
 
         const phaseStartTime = performance.now();
 
-        ctx.joshParams = await stubJoshOptimize( // STUB: replace with real model
+        ctx.joshParams = await stubJoshOptimize(
           ctx,
           camera,
           totalIters,
@@ -475,13 +493,12 @@ export class BatchPipeline {
           signal,
         );
 
-        // Persist result to IndexedDB -----------------------------------------
         const result: PerFrameResult = {
           frameIndex: globalIdx,
           timestamp: ctx.frame.timestamp,
           smplPose: ctx.joshParams.slice(0, 72),
           smplShape: ctx.joshParams.slice(72, 82),
-          cameraPose: new Float32Array(16), // identity until real solver
+          cameraPose: new Float32Array(16),
           depthScale: 1.0,
           vertices: null,
           jointPositions: new Float32Array(JOSH_CONFIG.smplJointCount * 3),
@@ -493,11 +510,6 @@ export class BatchPipeline {
       if (signal?.aborted) break;
 
       // ---- Phase I: Keyframe interpolation --------------------------------
-      // At 5 FPS every extracted frame is a keyframe, but if the chunk
-      // contains any gaps (e.g. from cache skips), linearly interpolate.
-      // We walk the chunk looking for consecutive cached + newly-computed
-      // frames and fill any nulls via interpolation.
-
       const keyframePairs: { aIdx: number; bIdx: number }[] = [];
       for (let i = 0; i < frameContexts.length - 1; i++) {
         const aCtx = frameContexts[i]!;
@@ -513,8 +525,6 @@ export class BatchPipeline {
         const bParams = frameContexts[bIdx]!.joshParams!;
         const globalIdx = chunkStart + aIdx;
 
-        // At 5 FPS there are no sub-frames between adjacent keyframes,
-        // so this loop body only runs if bIdx > aIdx + 1 (future use).
         for (let sub = aIdx + 1; sub < bIdx; sub++) {
           const t = (sub - aIdx) / (bIdx - aIdx);
           const interpolated = interpolateParams(aParams, bParams, t);
@@ -580,13 +590,6 @@ export class BatchPipeline {
    * performance-sensitive consumers.
    */
   async getFrameResult(frameIndex: number): Promise<PerFrameResult | null> {
-    // We need the video hash to open the right DB, but at this API layer
-    // we don't have it.  Callers that need low-latency access should hold
-    // a reference to the JoshResultCache directly.  This method is a
-    // convenience wrapper that searches across known cache databases by
-    // trying to load from the most recently created one.
-    //
-    // For now, surface a clear error so callers know to use the cache directly.
     void frameIndex;
     console.warn(
       '[BatchPipeline] getFrameResult() requires a video hash. ' +
@@ -618,48 +621,27 @@ export class BatchPipeline {
   }
 
   /**
-   * Attempt to load the ROMP ONNX model on first use.
-   * Failure is non-fatal — _rompInitialized is set to true regardless so we
-   * only attempt loading once per pipeline instance.
-   */
-  private async _ensureRompInit(): Promise<void> {
-    if (this._rompInitialized) return;
-    this._rompInitialized = true; // prevent repeated attempts on failure
-    try {
-      await this._romp.load();
-    } catch {
-      // Model unavailable — Phase E will return null and pipeline continues.
-      console.warn('[BatchPipeline] ROMP model not available — smplInit will be null');
-    }
-  }
-
-  /**
-   * Run ROMP on a single frame and return an 89-element Float32Array suitable
-   * for seeding the SMPL parameter buffer, or null if ROMP is not loaded /
-   * returns no detection.
+   * Attempt to load MASt3R on first call.
    *
-   * Buffer layout matches JOSH_CONFIG.paramDim (89):
-   *   [0..71]  pose   (axis-angle, 24 joints × 3)
-   *   [72..81] betas  (10 shape coefficients)
-   *   [82..88] zeros  (global trans, orient, scale — left for the solver)
+   * A failure (e.g. model file not yet placed at public/models/) is non-fatal:
+   * _mast3r stays null and Phase C/D fall back to no-ops / config defaults.
    */
-  private async _runRomp(frame: ExtractedFrame): Promise<Float32Array | null> {
-    if (!this._romp.isLoaded()) return null;
+  private async _ensureMast3rInit(): Promise<void> {
+    if (this._mast3rInitialized) return;
+    this._mast3rInitialized = true;
 
     try {
-      const result = await this._romp.estimate(frame.imageData);
-      if (result === null) return null;
-
-      const params = new Float32Array(JOSH_CONFIG.paramDim); // zeros
-      // pose: [0..71]
-      params.set(result.pose.subarray(0, 72), 0);
-      // betas: [72..81]
-      params.set(result.betas.subarray(0, 10), 72);
-      // global trans, orient, scale remain zero — the solver handles them
-      return params;
-    } catch (err) {
-      console.warn('[BatchPipeline] ROMP inference error (non-fatal):', err);
-      return null;
+      const node = new MASt3RNode('/models/mast3r-vit-large-fp32.onnx');
+      await node.load();
+      this._mast3r = node;
+      console.log('[BatchPipeline] MASt3R model loaded');
+    } catch (e) {
+      console.info(
+        '[BatchPipeline] MASt3R not available — Phase C uses null pointmaps, ' +
+        'Phase D uses config-default focal length.',
+        e,
+      );
+      this._mast3r = null;
     }
   }
 
@@ -670,6 +652,7 @@ export class BatchPipeline {
   dispose(): void {
     this._segmentation.dispose();
     this._pose2d.dispose();
-    this._romp.dispose();
+    this._mast3r?.dispose();
+    this._mast3r = null;
   }
 }
