@@ -1,11 +1,9 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { resolve } from 'node:path';
-import { copyFileSync, mkdirSync, existsSync } from 'node:fs';
+import { copyFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
-// Copy ORT WASM files to a place Vite can serve them without transformation.
-// These go into demo/assets/ort/ (not demo/public/) so Vite doesn't try to
-// transform them as source modules.
+// Copy ORT WASM binary to demo/assets/ort/ (only the .wasm, not .mjs)
 function copyOrtWasmFiles() {
   const ortDist = resolve(__dirname, 'node_modules/onnxruntime-web/dist');
   const dest = resolve(__dirname, 'demo/assets/ort');
@@ -21,8 +19,38 @@ function copyOrtWasmFiles() {
 
 copyOrtWasmFiles();
 
+/**
+ * Vite plugin that serves ORT's .mjs worker file directly from node_modules.
+ * ORT dynamically imports this file for the WebGPU backend, but Vite's
+ * dep optimizer can't handle it (it's a worker, not a regular module).
+ */
+function ortWorkerPlugin(): Plugin {
+  const ortDist = resolve(__dirname, 'node_modules/onnxruntime-web/dist');
+  return {
+    name: 'ort-worker-serve',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        // Intercept requests for ORT .mjs files
+        if (req.url && req.url.includes('ort-wasm-simd-threaded') && req.url.endsWith('.mjs')) {
+          // Extract just the filename
+          const filename = req.url.split('/').pop()!.split('?')[0]!;
+          const filePath = resolve(ortDist, filename);
+          if (existsSync(filePath)) {
+            const content = readFileSync(filePath);
+            res.setHeader('Content-Type', 'text/javascript');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.end(content);
+            return;
+          }
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [basicSsl()],
+  plugins: [basicSsl(), ortWorkerPlugin()],
 
   root: 'demo',
 
@@ -58,4 +86,9 @@ export default defineConfig({
 
   // WGSL files imported as raw strings
   assetsInclude: ['**/*.wgsl'],
+
+  // Don't let Vite rewrite ORT's internal dynamic imports
+  optimizeDeps: {
+    exclude: ['onnxruntime-web'],
+  },
 });
