@@ -28,16 +28,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
 
   let diff = current_params[idx] - prev_params[idx];
-  let temporal_loss = params.weight * diff * diff;
-
-  // Accumulate loss (slot 2 = temporal)
-  if (idx == 0u) {
-    loss[2] = 0.0; // reset once per dispatch
-  }
-  storageBarrier();
-
-  loss[2] += temporal_loss;
 
   // Gradient: d/dx_i = 2 * weight * (x_i - x_prev_i)
   gradient[idx] += params.weight * 2.0 * diff;
+
+  // Write per-param loss to slot 2 (first thread only, approximate)
+  if (idx == 0u) {
+    var total_loss = 0.0;
+    for (var i = 0u; i < params.param_dim; i++) {
+      let d = current_params[i] - prev_params[i];
+      total_loss += params.weight * d * d;
+    }
+    loss[2] = total_loss;
+  }
 }
