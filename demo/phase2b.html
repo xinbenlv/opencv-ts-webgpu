@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JOSH Phase 2B — Batch Pipeline</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #f0f6fc;
+      margin-bottom: 0.25rem;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: #8b949e;
+      margin-bottom: 1.5rem;
+    }
+
+    /* ── Drop zone ───────────────────────────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed #30363d;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      margin-bottom: 1.5rem;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: #58a6ff;
+      background: rgba(88, 166, 255, 0.06);
+    }
+    .drop-zone input[type=file] { display: none; }
+    .drop-zone .label { font-size: 0.9rem; color: #8b949e; }
+    .drop-zone .label strong { color: #58a6ff; }
+
+    /* ── Controls ─────────────────────────────────────────────────────────── */
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      padding: 0.45rem 1rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #btnProcess { background: #238636; color: #fff; }
+    #btnProcess:not(:disabled):hover { background: #2ea043; }
+
+    #btnCancel { background: #da3633; color: #fff; }
+    #btnCancel:not(:disabled):hover { background: #f85149; }
+
+    .eta-badge {
+      margin-left: auto;
+      font-size: 0.8rem;
+      color: #8b949e;
+      background: #161b22;
+      border: 1px solid #30363d;
+      padding: 0.3rem 0.7rem;
+      border-radius: 20px;
+    }
+
+    /* ── Stats bar ───────────────────────────────────────────────────────── */
+    .stats {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      font-size: 0.8rem;
+      color: #8b949e;
+      background: #161b22;
+      border: 1px solid #21262d;
+      border-radius: 6px;
+      padding: 0.6rem 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stats span strong { color: #c9d1d9; }
+
+    /* ── Phase table ─────────────────────────────────────────────────────── */
+    .phase-table-wrap {
+      background: #161b22;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    thead th {
+      background: #21262d;
+      color: #8b949e;
+      text-align: left;
+      padding: 0.5rem 0.8rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.72rem;
+    }
+
+    tbody tr { border-top: 1px solid #21262d; }
+    tbody td { padding: 0.45rem 0.8rem; vertical-align: middle; }
+
+    .phase-name {
+      font-weight: 600;
+      white-space: nowrap;
+      color: #f0f6fc;
+      width: 130px;
+    }
+
+    .phase-status {
+      width: 80px;
+      font-size: 0.75rem;
+    }
+    .status-idle    { color: #484f58; }
+    .status-running { color: #d29922; }
+    .status-done    { color: #3fb950; }
+    .status-skipped { color: #58a6ff; }
+
+    /* Progress bar */
+    .bar-cell { width: 220px; }
+    .bar-bg {
+      background: #21262d;
+      border-radius: 4px;
+      height: 8px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: #1f6feb;
+      transition: width 0.15s ease;
+      width: 0%;
+    }
+    .bar-fill.done { background: #238636; }
+
+    .phase-detail { color: #8b949e; font-size: 0.78rem; }
+
+    /* ── Loss curve ─────────────────────────────────────────────────────── */
+    .loss-section {
+      background: #161b22;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .loss-section h2 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #8b949e;
+      margin-bottom: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #lossCanvas {
+      width: 100%;
+      height: 180px;
+      display: block;
+      border-radius: 4px;
+    }
+
+    /* ── Result section ──────────────────────────────────────────────────── */
+    #resultBox {
+      background: #161b22;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+      padding: 1rem;
+      font-size: 0.82rem;
+      display: none;
+    }
+    #resultBox h2 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #3fb950;
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #resultBox .field { margin-top: 0.3rem; }
+    #resultBox .field span { color: #f0f6fc; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+<h1>JOSH — Batch Pipeline (Phase 2B)</h1>
+<p class="subtitle">Offline video processing: extract → segment → pose → contact → optimise</p>
+
+<!-- Drop zone -->
+<div class="drop-zone" id="dropZone">
+  <input type="file" id="fileInput" accept="video/*" />
+  <p class="label">
+    <strong>Choose a video file</strong> or drag &amp; drop here
+  </p>
+  <p class="label" id="fileLabel" style="margin-top:0.4rem;font-size:0.78rem;"></p>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <button id="btnProcess" disabled>Process Video</button>
+  <button id="btnCancel" disabled>Cancel</button>
+  <span class="eta-badge" id="etaBadge">ETA: —</span>
+</div>
+
+<!-- Stats bar -->
+<div class="stats">
+  <div>Frames: <strong id="statFrames">—</strong></div>
+  <div>Chunk: <strong id="statChunk">—</strong></div>
+  <div>Cached: <strong id="statCached">—</strong></div>
+  <div>Elapsed: <strong id="statElapsed">—</strong></div>
+</div>
+
+<!-- Phase progress table -->
+<div class="phase-table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Phase</th>
+        <th>Status</th>
+        <th class="bar-cell">Progress</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody id="phaseTable">
+      <!-- rows injected by JS -->
+    </tbody>
+  </table>
+</div>
+
+<!-- Loss curve -->
+<div class="loss-section">
+  <h2>Optimisation Loss Curve</h2>
+  <canvas id="lossCanvas" width="1200" height="360"></canvas>
+</div>
+
+<!-- Result -->
+<div id="resultBox">
+  <h2>Processing Complete</h2>
+  <div class="field">Total frames: <span id="resFc">—</span></div>
+  <div class="field">Frames cached (IndexedDB): <span id="resCached">—</span></div>
+  <div class="field">Total time: <span id="resTime">—</span></div>
+</div>
+
+<script type="module">
+// ── Phase metadata ────────────────────────────────────────────────────────────
+
+const PHASES = [
+  { key: 'extract',     label: 'A — Extract frames',       color: '#1f6feb' },
+  { key: 'segment',     label: 'B — Segmentation',         color: '#6e40c9' },
+  { key: 'mast3r',      label: 'C — MASt3R (stub)',        color: '#8b949e' },
+  { key: 'focal',       label: 'D — Focal recovery (stub)',color: '#8b949e' },
+  { key: 'romp',        label: 'E — ROMP (stub)',           color: '#8b949e' },
+  { key: 'pose2d',      label: 'F — MoveNet 2D pose',      color: '#d29922' },
+  { key: 'contact',     label: 'G — Contact detection',    color: '#da3633' },
+  { key: 'optimize',    label: 'H — JOSH Optimise',        color: '#238636' },
+  { key: 'interpolate', label: 'I — Interpolation',        color: '#1f6feb' },
+];
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('fileInput');
+const fileLabel  = document.getElementById('fileLabel');
+const btnProcess = document.getElementById('btnProcess');
+const btnCancel  = document.getElementById('btnCancel');
+const etaBadge   = document.getElementById('etaBadge');
+const phaseTable = document.getElementById('phaseTable');
+
+const statFrames  = document.getElementById('statFrames');
+const statChunk   = document.getElementById('statChunk');
+const statCached  = document.getElementById('statCached');
+const statElapsed = document.getElementById('statElapsed');
+
+const lossCanvas = document.getElementById('lossCanvas');
+const lossCtx    = lossCanvas.getContext('2d');
+
+const resultBox = document.getElementById('resultBox');
+const resFc     = document.getElementById('resFc');
+const resCached = document.getElementById('resCached');
+const resTime   = document.getElementById('resTime');
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let selectedFile = null;
+let abortController = null;
+let startTime = 0;
+let elapsedTimer = null;
+
+// Loss curve data
+const lossPoints = [];          // { iter, loss }
+const MAX_LOSS_PTS = 2000;
+
+// Per-phase row state
+const phaseState = {};
+
+// ── Build phase table rows ────────────────────────────────────────────────────
+
+function buildTable() {
+  phaseTable.innerHTML = '';
+  for (const p of PHASES) {
+    phaseState[p.key] = { status: 'idle', progress: 0, detail: '' };
+    const tr = document.createElement('tr');
+    tr.id = `row-${p.key}`;
+    tr.innerHTML = `
+      <td class="phase-name">${p.label}</td>
+      <td class="phase-status"><span id="st-${p.key}" class="status-idle">Idle</span></td>
+      <td class="bar-cell">
+        <div class="bar-bg">
+          <div class="bar-fill" id="bar-${p.key}" style="background:${p.color}"></div>
+        </div>
+      </td>
+      <td class="phase-detail" id="det-${p.key}"></td>
+    `;
+    phaseTable.appendChild(tr);
+  }
+}
+buildTable();
+
+// ── Phase update helpers ──────────────────────────────────────────────────────
+
+function setPhaseStatus(key, status, detail = '') {
+  const st  = document.getElementById(`st-${key}`);
+  const det = document.getElementById(`det-${key}`);
+  if (!st || !det) return;
+
+  st.className = `status-${status}`;
+  const labels = { idle: 'Idle', running: 'Running…', done: 'Done', skipped: 'Skip' };
+  st.textContent = labels[status] ?? status;
+
+  det.textContent = detail;
+  phaseState[key].status = status;
+  phaseState[key].detail = detail;
+}
+
+function setPhaseProgress(key, pct) {
+  const bar = document.getElementById(`bar-${key}`);
+  if (!bar) return;
+  bar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  if (pct >= 99.5) bar.classList.add('done');
+}
+
+// ── Loss curve ────────────────────────────────────────────────────────────────
+
+function clearLoss() {
+  lossPoints.length = 0;
+  drawLoss();
+}
+
+function addLossPoint(iter, loss) {
+  lossPoints.push({ iter, loss });
+  if (lossPoints.length > MAX_LOSS_PTS) lossPoints.shift();
+  drawLoss();
+}
+
+function drawLoss() {
+  const W = lossCanvas.width;
+  const H = lossCanvas.height;
+  const pad = { top: 20, right: 20, bottom: 32, left: 52 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  lossCtx.clearRect(0, 0, W, H);
+
+  // Background
+  lossCtx.fillStyle = '#0d1117';
+  lossCtx.fillRect(0, 0, W, H);
+
+  if (lossPoints.length < 2) {
+    lossCtx.fillStyle = '#484f58';
+    lossCtx.font = '24px system-ui';
+    lossCtx.textAlign = 'center';
+    lossCtx.fillText('No data yet', W / 2, H / 2);
+    return;
+  }
+
+  const maxLoss = Math.max(...lossPoints.map(p => p.loss));
+  const minLoss = Math.min(...lossPoints.map(p => p.loss));
+  const maxIter = lossPoints[lossPoints.length - 1].iter;
+  const lossRange = maxLoss - minLoss || 1;
+
+  function toX(iter) { return pad.left + (iter / Math.max(maxIter, 1)) * plotW; }
+  function toY(loss) { return pad.top + plotH - ((loss - minLoss) / lossRange) * plotH; }
+
+  // Grid lines
+  lossCtx.strokeStyle = '#21262d';
+  lossCtx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const y = pad.top + (g / 4) * plotH;
+    lossCtx.beginPath();
+    lossCtx.moveTo(pad.left, y);
+    lossCtx.lineTo(pad.left + plotW, y);
+    lossCtx.stroke();
+    const lv = (maxLoss - (g / 4) * lossRange).toFixed(3);
+    lossCtx.fillStyle = '#484f58';
+    lossCtx.font = '20px system-ui';
+    lossCtx.textAlign = 'right';
+    lossCtx.fillText(lv, pad.left - 8, y + 6);
+  }
+
+  // X-axis label
+  lossCtx.fillStyle = '#484f58';
+  lossCtx.font = '20px system-ui';
+  lossCtx.textAlign = 'center';
+  lossCtx.fillText('Iteration', pad.left + plotW / 2, H - 4);
+
+  // Gradient fill under curve
+  const grad = lossCtx.createLinearGradient(0, pad.top, 0, pad.top + plotH);
+  grad.addColorStop(0, 'rgba(31,111,235,0.4)');
+  grad.addColorStop(1, 'rgba(31,111,235,0.0)');
+  lossCtx.fillStyle = grad;
+  lossCtx.beginPath();
+  lossCtx.moveTo(toX(lossPoints[0].iter), pad.top + plotH);
+  for (const p of lossPoints) lossCtx.lineTo(toX(p.iter), toY(p.loss));
+  lossCtx.lineTo(toX(lossPoints[lossPoints.length - 1].iter), pad.top + plotH);
+  lossCtx.closePath();
+  lossCtx.fill();
+
+  // Curve line
+  lossCtx.strokeStyle = '#58a6ff';
+  lossCtx.lineWidth = 2;
+  lossCtx.beginPath();
+  for (let i = 0; i < lossPoints.length; i++) {
+    const { iter, loss } = lossPoints[i];
+    if (i === 0) lossCtx.moveTo(toX(iter), toY(loss));
+    else         lossCtx.lineTo(toX(iter), toY(loss));
+  }
+  lossCtx.stroke();
+}
+
+drawLoss();
+
+// ── Elapsed timer ─────────────────────────────────────────────────────────────
+
+function startElapsed() {
+  startTime = performance.now();
+  clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(() => {
+    const ms = performance.now() - startTime;
+    statElapsed.textContent = `${(ms / 1000).toFixed(1)}s`;
+  }, 250);
+}
+
+function stopElapsed() {
+  clearInterval(elapsedTimer);
+}
+
+// ── File selection ────────────────────────────────────────────────────────────
+
+dropZone.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files && fileInput.files[0]) {
+    selectedFile = fileInput.files[0];
+    fileLabel.textContent = `Selected: ${selectedFile.name} (${(selectedFile.size / 1e6).toFixed(1)} MB)`;
+    btnProcess.disabled = false;
+  }
+});
+
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer?.files?.[0];
+  if (f && f.type.startsWith('video/')) {
+    selectedFile = f;
+    fileLabel.textContent = `Selected: ${selectedFile.name} (${(selectedFile.size / 1e6).toFixed(1)} MB)`;
+    btnProcess.disabled = false;
+  }
+});
+
+// ── Process ───────────────────────────────────────────────────────────────────
+
+btnProcess.addEventListener('click', async () => {
+  if (!selectedFile) return;
+
+  // Reset UI
+  buildTable();
+  clearLoss();
+  resultBox.style.display = 'none';
+  etaBadge.textContent = 'ETA: —';
+  statFrames.textContent = '—';
+  statChunk.textContent = '—';
+  statCached.textContent = '—';
+  statElapsed.textContent = '—';
+
+  btnProcess.disabled = true;
+  btnCancel.disabled = false;
+  abortController = new AbortController();
+
+  startElapsed();
+
+  // Check WebGPU availability
+  let device = null;
+  if (navigator.gpu) {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) device = await adapter.requestDevice();
+    } catch (e) {
+      console.warn('[phase2b] WebGPU not available:', e);
+    }
+  }
+  if (!device) {
+    // Minimal stub GPUDevice-like object so BatchPipeline constructor accepts it
+    device = /** @type {GPUDevice} */ ({});
+  }
+
+  // Dynamically import the pipeline
+  let BatchPipeline;
+  try {
+    const mod = await import('./josh/batch/batch-pipeline.ts');
+    BatchPipeline = mod.BatchPipeline;
+  } catch (e) {
+    console.error('[phase2b] Failed to import BatchPipeline:', e);
+    setPhaseStatus('extract', 'done', 'Import error — check console');
+    btnProcess.disabled = false;
+    btnCancel.disabled = true;
+    stopElapsed();
+    return;
+  }
+
+  // Phase tracking state
+  let lastTotalFrames = 1;
+  const phaseFrameCounts = {};
+  for (const p of PHASES) phaseFrameCounts[p.key] = 0;
+
+  function onProgress(p) {
+    lastTotalFrames = p.totalFrames || lastTotalFrames;
+
+    // Update stats bar
+    statFrames.textContent = `${p.frameIndex} / ${p.totalFrames}`;
+    statChunk.textContent = `${p.chunkIndex + 1} / ${p.totalChunks}`;
+
+    // Track per-phase high-water mark
+    phaseFrameCounts[p.phase] = Math.max(phaseFrameCounts[p.phase] || 0, p.frameIndex);
+
+    const pct = p.totalFrames > 0 ? (p.frameIndex / p.totalFrames) * 100 : 0;
+
+    // Mark previous phases done when a later phase starts
+    const order = PHASES.map(x => x.key);
+    const cur = order.indexOf(p.phase);
+    for (let i = 0; i < cur; i++) {
+      const k = order[i];
+      if (phaseState[k].status === 'running') {
+        setPhaseStatus(k, 'done');
+        setPhaseProgress(k, 100);
+      }
+    }
+
+    // Current phase
+    setPhaseStatus(p.phase, 'running');
+    setPhaseProgress(p.phase, pct);
+
+    if (p.phase === 'optimize') {
+      const totalIters = 700; // stage1 + stage2
+      const iterPct = p.iterIndex != null ? (p.iterIndex / totalIters) * 100 : pct;
+      setPhaseProgress(p.phase, iterPct);
+      const lossStr = p.loss != null ? `iter ${p.iterIndex} / ${totalIters} — loss ${p.loss.toFixed(4)}` : '';
+      setPhaseStatus(p.phase, 'running', lossStr);
+
+      if (p.iterIndex != null && p.loss != null) {
+        addLossPoint(p.iterIndex, p.loss);
+      }
+
+      if (p.etaMs != null) {
+        const etaSec = p.etaMs / 1000;
+        etaBadge.textContent = etaSec > 60
+          ? `ETA: ${(etaSec / 60).toFixed(1)} min`
+          : `ETA: ${etaSec.toFixed(0)} s`;
+      }
+    }
+  }
+
+  const pipeline = new BatchPipeline(device, onProgress);
+  const videoUrl = URL.createObjectURL(selectedFile);
+
+  try {
+    const result = await pipeline.process(videoUrl, abortController.signal);
+    URL.revokeObjectURL(videoUrl);
+    pipeline.dispose();
+    stopElapsed();
+
+    // Mark all phases done
+    for (const p of PHASES) {
+      if (phaseState[p.key].status === 'running' || phaseState[p.key].status === 'idle') {
+        setPhaseStatus(p.key, 'done');
+        setPhaseProgress(p.key, 100);
+      }
+    }
+
+    statCached.textContent = result.cachedFrames;
+
+    // Show result box
+    resFc.textContent = result.frameCount;
+    resCached.textContent = result.cachedFrames;
+    resTime.textContent = `${(result.processingTimeMs / 1000).toFixed(2)} s`;
+    resultBox.style.display = 'block';
+
+  } catch (err) {
+    URL.revokeObjectURL(videoUrl);
+    pipeline.dispose();
+    stopElapsed();
+
+    if (err.name === 'AbortError') {
+      etaBadge.textContent = 'Cancelled';
+      for (const p of PHASES) {
+        if (phaseState[p.key].status === 'running') {
+          setPhaseStatus(p.key, 'idle', 'Cancelled');
+        }
+      }
+    } else {
+      console.error('[phase2b] Pipeline error:', err);
+      etaBadge.textContent = 'Error — see console';
+    }
+  }
+
+  btnProcess.disabled = false;
+  btnCancel.disabled = true;
+  abortController = null;
+});
+
+// ── Cancel ────────────────────────────────────────────────────────────────────
+
+btnCancel.addEventListener('click', () => {
+  abortController?.abort();
+  btnCancel.disabled = true;
+  etaBadge.textContent = 'Cancelling…';
+});
+</script>
+</body>
+</html>

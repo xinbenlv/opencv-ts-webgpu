@@ -141,12 +141,13 @@
 <body>
 
 <h1>JOSH Phase 2 — Utility Demos</h1>
-<p class="subtitle">SE3 Interpolation &nbsp;·&nbsp; Chunk Concatenation &nbsp;·&nbsp; Result Cache</p>
+<p class="subtitle">SE3 Interpolation &nbsp;·&nbsp; Chunk Concatenation &nbsp;·&nbsp; Result Cache &nbsp;·&nbsp; Progress UI</p>
 
 <div class="tabs">
   <button class="tab-btn active" onclick="showTab('se3')">SE3 Interpolation</button>
   <button class="tab-btn"        onclick="showTab('chunk')">Chunk Concatenation</button>
   <button class="tab-btn"        onclick="showTab('cache')">Result Cache</button>
+  <button class="tab-btn"        onclick="showTab('progress')">Progress UI Demo</button>
 </div>
 
 <!-- =====================================================================
@@ -207,6 +208,21 @@
 </div>
 
 <!-- =====================================================================
+     TAB 4 — Progress UI Demo
+     ===================================================================== -->
+<div id="tab-progress" class="tab-panel">
+  <div class="controls" style="margin-bottom:12px;">
+    <button id="pui-simulate-btn">&#9654; Simulate Run</button>
+    <button id="pui-reset-btn" class="danger">Reset</button>
+  </div>
+  <div id="pui-container"></div>
+  <p class="desc" style="margin-top:10px;">
+    Simulates the 9-phase JOSH batch pipeline with fake progress at 100 ms intervals.
+    The loss curve, ETA, and stats bar update live as each phase advances.
+  </p>
+</div>
+
+<!-- =====================================================================
      Inline JavaScript — pure math, no import maps needed
      ===================================================================== -->
 <script>
@@ -215,9 +231,10 @@
 // -------------------------------------------------------------------------
 // Tab switching
 // -------------------------------------------------------------------------
+const TAB_NAMES = ['se3','chunk','cache','progress'];
 function showTab(name) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    b.classList.toggle('active', ['se3','chunk','cache'][i] === name);
+    b.classList.toggle('active', TAB_NAMES[i] === name);
   });
   document.querySelectorAll('.tab-panel').forEach(p => {
     p.classList.toggle('active', p.id === 'tab-' + name);
@@ -225,6 +242,7 @@ function showTab(name) {
   if (name === 'se3') drawSE3(currentT);
   if (name === 'chunk') drawChunk(false);
   if (name === 'cache') renderCacheTable();
+  if (name === 'progress') puiEnsureVisible();
 }
 
 // =========================================================================
@@ -698,6 +716,351 @@ if (!IDB_AVAILABLE) {
 }
 
 renderCacheTable();
+
+// =========================================================================
+// TAB 4 — Progress UI (inline, no module bundler)
+// =========================================================================
+
+// ---- Inject styles ----
+(function injectProgressStyles() {
+  if (document.getElementById('progress-ui-styles')) return;
+  const s = document.createElement('style');
+  s.id = 'progress-ui-styles';
+  s.textContent = `
+.pui-root{display:none;flex-direction:column;gap:12px;background:#1a1a2e;border:1px solid #2a2a4a;border-radius:8px;padding:16px;font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;color:#e0e0f0;min-width:420px}
+.pui-root.pui-visible{display:flex}
+.pui-stats{display:flex;gap:16px;background:#12122a;border:1px solid #2a2a4a;border-radius:4px;padding:7px 12px;font-family:monospace;font-size:12px;flex-wrap:wrap;color:#a0a8d0}
+.pui-stats b{color:#dde}
+.pui-eta{font-size:12px;color:#8888aa;text-align:right;font-family:monospace}
+.pui-eta b{color:#aaddff}
+.pui-phase-table{display:flex;flex-direction:column;gap:4px}
+.pui-phase-row{display:grid;grid-template-columns:24px 160px 1fr 56px 70px;align-items:center;gap:8px}
+.pui-phase-icon{font-size:14px;text-align:center;line-height:1}
+.pui-phase-label{font-size:12px;color:#ccd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pui-phase-bar-wrap{position:relative;height:8px;background:#22224a;border-radius:4px;overflow:hidden}
+.pui-phase-bar{position:absolute;inset:0 auto 0 0;border-radius:4px;transition:width 0.25s ease;background:linear-gradient(90deg,#4CAF50,#2196F3)}
+.pui-phase-bar.pui-active{animation:pui-pulse 1.2s ease-in-out infinite}
+@keyframes pui-pulse{0%{opacity:1}50%{opacity:.65}100%{opacity:1}}
+.pui-phase-counter{font-family:monospace;font-size:11px;color:#7788aa;white-space:nowrap;text-align:right}
+.pui-badge{font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600;white-space:nowrap;text-align:center}
+.pui-badge-pending{background:#222244;color:#6666aa}
+.pui-badge-active{background:#1a3a1a;color:#66cc66;border:1px solid #44aa44}
+.pui-badge-done{background:#123312;color:#44ee44}
+.pui-badge-error{background:#3a1212;color:#ee4444}
+.pui-loss-wrap{display:flex;flex-direction:column;gap:4px}
+.pui-loss-title{font-size:11px;color:#7788aa}
+.pui-loss-canvas{display:block;background:#0d0d1e;border:1px solid #2a2a4a;border-radius:4px;width:100%;height:200px}
+  `;
+  document.head.appendChild(s);
+})();
+
+// ---- Phase metadata ----
+const PUI_PHASES = [
+  { name:'extract',     label:'Frame Extraction',    icon:'🎞️', color:'#4CAF50' },
+  { name:'segment',     label:'Person Segmentation', icon:'✂️', color:'#66BB6A' },
+  { name:'mast3r',      label:'MASt3R Depth',         icon:'🔭', color:'#42A5F5' },
+  { name:'focal',       label:'Focal Estimation',    icon:'📐', color:'#26C6DA' },
+  { name:'romp',        label:'ROMP Detection',       icon:'🧍', color:'#AB47BC' },
+  { name:'pose2d',      label:'2D Pose (MoveNet)',    icon:'🦴', color:'#EC407A' },
+  { name:'contact',     label:'Contact Detection',   icon:'👣', color:'#FFA726' },
+  { name:'optimize',    label:'JOSH Optimisation',   icon:'⚙️', color:'#EF5350' },
+  { name:'interpolate', label:'SE3 Interpolation',   icon:'🔗', color:'#26A69A' },
+];
+
+// ---- ProgressUI class (inline, vanilla JS) ----
+class ProgressUI {
+  constructor({ container }) {
+    this._phases = PUI_PHASES;
+    this._phaseState = new Map();
+    this._phaseStartTimes = new Map();
+    this._phaseCompletionTimes = [];
+    this._lossPoints = [];
+    this._currentFrameIndex = 0;
+    this._statsFrame = 0; this._statsTotalFrames = 0;
+    this._statsChunk = 1; this._statsTotalChunks = 1;
+    this._statsIter = 0;  this._statsTotalIter = 700;
+    this._statsLoss = 0;
+
+    // Root
+    this._root = document.createElement('div');
+    this._root.className = 'pui-root';
+
+    // Stats bar
+    const statsBar = document.createElement('div');
+    statsBar.className = 'pui-stats';
+    this._statsFrameEl = document.createElement('b');
+    this._statsChunkEl = document.createElement('b');
+    this._statsIterEl  = document.createElement('b');
+    this._statsLossEl  = document.createElement('b');
+    statsBar.append('Frame ', this._statsFrameEl, ' | Chunk ', this._statsChunkEl,
+                    ' | Iteration ', this._statsIterEl, ' | Loss: ', this._statsLossEl);
+
+    // ETA
+    const etaRow = document.createElement('div');
+    etaRow.className = 'pui-eta';
+    this._etaEl = document.createElement('b');
+    this._etaEl.textContent = '—';
+    etaRow.append('ETA: ', this._etaEl);
+
+    // Phase table
+    const table = document.createElement('div');
+    table.className = 'pui-phase-table';
+    for (const ph of this._phases) {
+      const row = document.createElement('div');
+      row.className = 'pui-phase-row';
+
+      const icon = document.createElement('div');
+      icon.className = 'pui-phase-icon';
+      icon.textContent = ph.icon;
+
+      const lbl = document.createElement('div');
+      lbl.className = 'pui-phase-label';
+      lbl.textContent = ph.label;
+
+      const barWrap = document.createElement('div');
+      barWrap.className = 'pui-phase-bar-wrap';
+      const bar = document.createElement('div');
+      bar.className = 'pui-phase-bar';
+      bar.style.width = '0%';
+      bar.style.background = `linear-gradient(90deg,${ph.color},#2196F3)`;
+      barWrap.appendChild(bar);
+
+      const counter = document.createElement('span');
+      counter.className = 'pui-phase-counter';
+      counter.textContent = '0/0';
+
+      const badge = document.createElement('span');
+      badge.className = 'pui-badge pui-badge-pending';
+      badge.textContent = 'pending';
+
+      row.append(icon, lbl, barWrap, counter, badge);
+      table.appendChild(row);
+      this._phaseState.set(ph.name, { bar, counter, badge, current:0, total:0, status:'pending' });
+    }
+
+    // Loss canvas
+    const lossWrap = document.createElement('div');
+    lossWrap.className = 'pui-loss-wrap';
+    const lossTitle = document.createElement('div');
+    lossTitle.className = 'pui-loss-title';
+    lossTitle.textContent = 'Optimisation Loss Curve';
+    this._canvas = document.createElement('canvas');
+    this._canvas.className = 'pui-loss-canvas';
+    this._canvas.width = 600;
+    this._canvas.height = 200;
+    this._ctx = this._canvas.getContext('2d');
+    lossWrap.append(lossTitle, this._canvas);
+
+    this._root.append(statsBar, etaRow, table, lossWrap);
+    container.appendChild(this._root);
+    this._updateStats();
+    this._drawLoss();
+  }
+
+  updatePhase(name, current, total, status = 'active') {
+    const s = this._phaseState.get(name);
+    if (!s) return;
+    const prev = s.status;
+    if (prev !== 'active' && status === 'active') this._phaseStartTimes.set(name, performance.now());
+    if (prev === 'active' && (status === 'done' || status === 'error')) {
+      const t0 = this._phaseStartTimes.get(name);
+      if (t0 !== undefined) { this._phaseCompletionTimes.push(performance.now() - t0); this._updateEta(); }
+    }
+    s.current = current; s.total = total; s.status = status;
+    const pct = total > 0 ? Math.min(100, current/total*100) : 0;
+    s.bar.style.width = pct + '%';
+    s.bar.classList.toggle('pui-active', status === 'active');
+    s.counter.textContent = total > 0 ? `${current}/${total}` : '—';
+    const labels = { pending:'pending', active:'running', done:'✓ done', error:'✗ error' };
+    s.badge.className = `pui-badge pui-badge-${status}`;
+    s.badge.textContent = labels[status];
+    if (name === 'extract' || name === 'optimize') {
+      this._statsFrame = current; this._statsTotalFrames = total; this._updateStats();
+    }
+  }
+
+  addLossPoint(pt) {
+    this._lossPoints.push(pt);
+    this._currentFrameIndex = pt.frameIndex;
+    this._statsIter = pt.iterIndex;
+    this._statsLoss = pt.loss;
+    this._updateStats();
+    this._drawLoss();
+  }
+
+  reset() {
+    for (const [, s] of this._phaseState) {
+      s.current=0; s.total=0; s.status='pending';
+      s.bar.style.width='0%'; s.bar.classList.remove('pui-active');
+      s.counter.textContent='0/0';
+      s.badge.className='pui-badge pui-badge-pending'; s.badge.textContent='pending';
+    }
+    this._lossPoints.length = 0;
+    this._phaseStartTimes.clear();
+    this._phaseCompletionTimes.length = 0;
+    this._statsFrame=0; this._statsTotalFrames=0;
+    this._statsChunk=1; this._statsTotalChunks=1;
+    this._statsIter=0; this._statsLoss=0;
+    this._etaEl.textContent = '—';
+    this._updateStats(); this._drawLoss();
+  }
+
+  show() { this._root.classList.add('pui-visible'); }
+  hide() { this._root.classList.remove('pui-visible'); }
+
+  _updateStats() {
+    this._statsFrameEl.textContent = this._statsTotalFrames > 0
+      ? `${this._statsFrame}/${this._statsTotalFrames}` : `${this._statsFrame}`;
+    this._statsChunkEl.textContent = `${this._statsChunk}/${this._statsTotalChunks}`;
+    this._statsIterEl.textContent  = this._statsTotalIter > 0
+      ? `${this._statsIter}/${this._statsTotalIter}` : `${this._statsIter}`;
+    this._statsLossEl.textContent  = this._statsLoss > 0 ? this._statsLoss.toFixed(4) : '—';
+  }
+
+  _updateEta() {
+    const times = this._phaseCompletionTimes;
+    if (!times.length) { this._etaEl.textContent = '—'; return; }
+    const win = times.slice(-3);
+    const avg = win.reduce((a,b)=>a+b,0)/win.length;
+    const rem = [...this._phaseState.values()].filter(s=>s.status==='pending'||s.status==='active').length;
+    const ms  = avg * rem;
+    if (ms <= 0) { this._etaEl.textContent = 'almost done'; return; }
+    const s = Math.round(ms/1000), m = Math.floor(s/60), sec = s%60;
+    this._etaEl.textContent = m > 0 ? `~${m}m ${sec}s remaining` : `~${sec}s remaining`;
+  }
+
+  _drawLoss() {
+    const canvas = this._canvas, ctx = this._ctx;
+    const W = canvas.width, H = canvas.height;
+    const PAD = {top:12,right:12,bottom:28,left:44};
+    const pW = W-PAD.left-PAD.right, pH = H-PAD.top-PAD.bottom;
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#0d0d1e'; ctx.fillRect(0,0,W,H);
+    // Axes
+    ctx.strokeStyle='#2a2a5a'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(PAD.left,PAD.top); ctx.lineTo(PAD.left,PAD.top+pH); ctx.lineTo(PAD.left+pW,PAD.top+pH); ctx.stroke();
+    const pts = this._lossPoints;
+    if (pts.length < 2) {
+      ctx.fillStyle='#444466'; ctx.font='12px monospace'; ctx.textAlign='center';
+      ctx.fillText('no data yet', PAD.left+pW/2, PAD.top+pH/2); ctx.textAlign='left'; return;
+    }
+    const minL=Math.min(...pts.map(p=>p.loss)), maxL=Math.max(...pts.map(p=>p.loss));
+    const minF=pts[0].frameIndex, maxF=pts[pts.length-1].frameIndex;
+    const lR=maxL-minL||1, fR=maxF-minF||1;
+    const toX=f=>PAD.left+((f-minF)/fR)*pW;
+    const toY=l=>PAD.top+pH-((l-minL)/lR)*pH;
+    // Gridlines
+    for (let i=0;i<=4;i++) {
+      const y=PAD.top+(pH/4)*i;
+      ctx.strokeStyle='#1e1e3a'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(PAD.left,y); ctx.lineTo(PAD.left+pW,y); ctx.stroke();
+      const lv=maxL-(lR/4)*i;
+      ctx.fillStyle='#555577'; ctx.font='10px monospace'; ctx.textAlign='right';
+      ctx.fillText(lv.toFixed(3),PAD.left-4,y+3);
+    }
+    ctx.textAlign='left';
+    // Current frame marker
+    const cfx=toX(this._currentFrameIndex);
+    ctx.strokeStyle='rgba(255,200,60,0.35)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(cfx,PAD.top); ctx.lineTo(cfx,PAD.top+pH); ctx.stroke(); ctx.setLineDash([]);
+    // Line
+    ctx.beginPath(); ctx.moveTo(toX(pts[0].frameIndex),toY(pts[0].loss));
+    for (let i=1;i<pts.length;i++) ctx.lineTo(toX(pts[i].frameIndex),toY(pts[i].loss));
+    const g=ctx.createLinearGradient(PAD.left,0,PAD.left+pW,0);
+    g.addColorStop(0,'#4CAF50'); g.addColorStop(1,'#2196F3');
+    ctx.strokeStyle=g; ctx.lineWidth=1.5; ctx.stroke();
+    // Dots
+    if (pts.length<=80) {
+      ctx.fillStyle='#4CAF50';
+      for (const pt of pts) { ctx.beginPath(); ctx.arc(toX(pt.frameIndex),toY(pt.loss),2.5,0,Math.PI*2); ctx.fill(); }
+    }
+    // X labels
+    ctx.fillStyle='#555577'; ctx.font='10px monospace'; ctx.textAlign='center';
+    const lc=Math.min(5,pts.length);
+    for (let i=0;i<lc;i++) {
+      const idx=Math.round((i/(lc-1))*(pts.length-1));
+      const pt=pts[idx];
+      ctx.fillText(`f${pt.frameIndex}`,toX(pt.frameIndex),PAD.top+pH+14);
+    }
+    ctx.textAlign='left';
+  }
+}
+
+// ---- Instantiate UI ----
+let _puiInstance = null;
+let _puiSimTimer = null;
+
+function puiEnsureVisible() {
+  if (!_puiInstance) {
+    _puiInstance = new ProgressUI({ container: document.getElementById('pui-container') });
+    _puiInstance.show();
+  }
+}
+
+document.getElementById('pui-simulate-btn').addEventListener('click', () => {
+  puiEnsureVisible();
+  // Stop any running simulation
+  if (_puiSimTimer) { clearTimeout(_puiSimTimer); _puiSimTimer = null; }
+  _puiInstance.reset();
+
+  const TOTAL_FRAMES = 50;
+  // Per-phase step counts (how many "steps" each phase takes in the sim)
+  const phaseSteps = [
+    { name:'extract',     steps:TOTAL_FRAMES, perStepIter:0,  lossPhase:false },
+    { name:'segment',     steps:TOTAL_FRAMES, perStepIter:0,  lossPhase:false },
+    { name:'mast3r',      steps:TOTAL_FRAMES, perStepIter:0,  lossPhase:false },
+    { name:'focal',       steps:20,           perStepIter:0,  lossPhase:false },
+    { name:'romp',        steps:TOTAL_FRAMES, perStepIter:0,  lossPhase:false },
+    { name:'pose2d',      steps:TOTAL_FRAMES, perStepIter:0,  lossPhase:false },
+    { name:'contact',     steps:TOTAL_FRAMES, perStepIter:0,  lossPhase:false },
+    { name:'optimize',    steps:TOTAL_FRAMES, perStepIter:14, lossPhase:true  },
+    { name:'interpolate', steps:TOTAL_FRAMES, perStepIter:0,  lossPhase:false },
+  ];
+
+  let phaseIdx = 0;
+  let stepIdx  = 0;
+  let iterAcc  = 0;
+
+  function tick() {
+    if (phaseIdx >= phaseSteps.length) return; // done
+
+    const ph = phaseSteps[phaseIdx];
+
+    if (stepIdx === 0) {
+      _puiInstance.updatePhase(ph.name, 0, ph.steps, 'active');
+    }
+
+    stepIdx++;
+    iterAcc += ph.perStepIter;
+    _puiInstance.updatePhase(ph.name, stepIdx, ph.steps, 'active');
+
+    if (ph.lossPhase) {
+      // Generate a fake loss curve: exponential decay with noise
+      const baseLoss = 0.85 * Math.exp(-stepIdx / (ph.steps * 0.4)) + 0.03;
+      const noise    = (Math.random() - 0.5) * 0.02;
+      _puiInstance.addLossPoint({ frameIndex: stepIdx - 1, iterIndex: iterAcc, loss: baseLoss + noise });
+    }
+
+    if (stepIdx >= ph.steps) {
+      _puiInstance.updatePhase(ph.name, ph.steps, ph.steps, 'done');
+      phaseIdx++;
+      stepIdx = 0;
+    }
+
+    if (phaseIdx < phaseSteps.length) {
+      _puiSimTimer = setTimeout(tick, 100);
+    } else {
+      _puiSimTimer = null;
+    }
+  }
+
+  tick();
+});
+
+document.getElementById('pui-reset-btn').addEventListener('click', () => {
+  if (_puiSimTimer) { clearTimeout(_puiSimTimer); _puiSimTimer = null; }
+  if (_puiInstance) _puiInstance.reset();
+});
 </script>
 </body>
 </html>
