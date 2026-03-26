@@ -39,6 +39,11 @@ function ortWorkerPlugin(): Plugin {
         if (!req.url) return next();
         const url = req.url;
 
+        // Add long-lived cache headers for model files (.onnx, .wasm, .bin)
+        if (/\.(onnx|wasm|bin)(\?|$)/.test(url)) {
+          res.setHeader('Cache-Control', 'public, max-age=604800, immutable'); // 7 days
+        }
+
         // Match any request for ORT's worker .mjs (with or without ?import, @fs prefix, etc)
         if (url.includes('ort-wasm-simd-threaded') && url.includes('.mjs')) {
           // Extract the filename (strip query params and path)

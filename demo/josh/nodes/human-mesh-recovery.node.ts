@@ -6,6 +6,7 @@ import {
   SMPL_JOINT_COUNT,
   SMPL_POSE_DIM,
 } from '../models/smpl.ts';
+import { cachedFetchModel } from '../models/cached-fetch.ts';
 
 const HMR_H = 384;
 const HMR_W = 384;
@@ -49,25 +50,6 @@ async function getOrt() {
 }
 
 /**
- * Fetch model as ArrayBuffer with retry logic for large files over slow networks.
- */
-async function fetchModelBuffer(url: string, retries = 3): Promise<ArrayBuffer> {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      console.log(`[HMR] Fetch attempt ${attempt}/${retries}: ${url}`);
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${url}`);
-      return await response.arrayBuffer();
-    } catch (e) {
-      if (attempt === retries) throw e;
-      console.warn(`[HMR] Fetch attempt ${attempt} failed, retrying in 2s...`, e);
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  }
-  throw new Error('unreachable');
-}
-
-/**
  * Node B: Human Mesh Recovery using ROMP + nosmpl ONNX models.
  *
  * Falls back to simulated animation if models fail to load.
@@ -107,9 +89,9 @@ export class HumanMeshRecoveryNode
     const status: ((id: string, s: string, t: string) => void) | undefined = (globalThis as any).__joshLoadingStatus;
 
     try {
-      status?.('hmrModel', 'active', 'Node B: Downloading ROMP pose model (111 MB)...');
-      console.log('[HMR] Downloading ROMP model (111MB)...');
-      const rompBuf = await fetchModelBuffer(this._rompModelUrl);
+      const rompBuf = await cachedFetchModel(
+        this._rompModelUrl, 'hmrModel', 'Node B: ROMP pose model', '111 MB', status,
+      );
       status?.('hmrModel', 'active', 'Node B: Creating ROMP session...');
       console.log('[HMR] Creating ROMP session...');
       this._rompSession = await ort.InferenceSession.create(rompBuf, {
@@ -119,9 +101,9 @@ export class HumanMeshRecoveryNode
       status?.('hmrModel', 'done', 'Node B: ROMP pose model ready');
       console.log('[HMR] ROMP loaded:', this._rompSession.inputNames, '→', this._rompSession.outputNames);
 
-      status?.('smplModel', 'active', 'Node B: Downloading SMPL model (17 MB)...');
-      console.log('[HMR] Downloading SMPL model (17MB)...');
-      const smplBuf = await fetchModelBuffer(this._smplModelUrl);
+      const smplBuf = await cachedFetchModel(
+        this._smplModelUrl, 'smplModel', 'Node B: SMPL forward pass', '17 MB', status,
+      );
       status?.('smplModel', 'active', 'Node B: Creating SMPL session...');
       console.log('[HMR] Creating SMPL session...');
       this._smplSession = await ort.InferenceSession.create(smplBuf, {

@@ -4,6 +4,7 @@ import { createNodeId, computeBufferLayout, dim } from '../../../src/core/types.
 import type { Shape2D, Shape3D } from '../../../src/core/types.ts';
 import { KernelRunner } from '../../../src/backends/webgpu/kernel-runner.ts';
 import { midasPostprocessKernel } from '../kernels/depth-estimation.kernel.ts';
+import { cachedFetchModel } from '../models/cached-fetch.ts';
 
 /**
  * MiDAS v2.1 small expects 256×256 input (NCHW: [1,3,256,256]).
@@ -87,9 +88,9 @@ export class DepthEstimationNode
 
     const status: ((id: string, s: string, t: string) => void) | undefined = (globalThis as any).__joshLoadingStatus;
 
-    status?.('depthModel', 'active', 'Node A: Downloading MiDAS depth model (64 MB)...');
-    console.log('[DepthEstimation] Downloading MiDAS model (64MB)...');
-    const modelBuf = await (await fetch(this._modelUrl)).arrayBuffer();
+    const modelBuf = await cachedFetchModel(
+      this._modelUrl, 'depthModel', 'Node A: MiDAS depth model', '64 MB', status,
+    );
 
     status?.('depthModel', 'active', 'Node A: Creating inference session...');
     console.log('[DepthEstimation] Creating session...');
