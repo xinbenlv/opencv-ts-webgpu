@@ -22,6 +22,8 @@
     "build:demo": "vite build --config vite.config.pages.ts && rm -rf demo-webapp/public && cp -r dist demo-webapp/public && cp demo/assets/josh-demo.mp4 demo-webapp/public/assets/ && cp -r demo/assets/models demo-webapp/public/assets/models && cp -r src/backends/wasm/pkg demo-webapp/public/assets/pkg"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
     "onnxruntime-web": "^1.20.0"
   },
   "devDependencies": {
