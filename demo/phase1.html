@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JOSH Phase 1 — Focal Recovery &amp; Contact Detection</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1rem 2rem;
+      border-bottom: 1px solid #222;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; }
+    .tag {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      background: #1a3a1a;
+      color: #4ade80;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid #222;
+      overflow-x: auto;
+      padding: 0 1rem;
+    }
+    .tab-btn {
+      padding: 0.7rem 1.1rem;
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: #ccc; }
+    .tab-btn.active { color: #4ade80; border-bottom-color: #4ade80; }
+    .tab-panel { display: none; padding: 2rem; max-width: 920px; margin: 0 auto; }
+    .tab-panel.active { display: block; }
+
+    h2 { font-size: 1.05rem; font-weight: 600; color: #e0e0e0; margin-bottom: 0.5rem; }
+
+    .explanation {
+      background: #111;
+      border: 1px solid #1f2f1f;
+      border-left: 3px solid #4ade80;
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      font-size: 0.82rem;
+      color: #aaa;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+
+    .demo-area {
+      display: flex;
+      gap: 1.5rem;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    canvas {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 6px;
+      display: block;
+    }
+
+    .controls {
+      flex: 1;
+      min-width: 220px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.9rem;
+    }
+
+    label { font-size: 0.8rem; color: #999; display: block; margin-bottom: 0.25rem; }
+    input[type=range] { width: 100%; accent-color: #4ade80; }
+    .slider-group { display: flex; flex-direction: column; gap: 0.2rem; }
+
+    button {
+      background: #1a3a1a;
+      color: #4ade80;
+      border: 1px solid #2a5a2a;
+      border-radius: 6px;
+      padding: 0.5rem 1.1rem;
+      font-size: 0.84rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: #254a25; }
+    button.active-btn {
+      background: #2a5a2a;
+      border-color: #4ade80;
+    }
+
+    .stat { font-size: 0.82rem; color: #888; }
+    .stat span { color: #e0e0e0; font-weight: 600; }
+
+    .result-box {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 0.8rem 1rem;
+      font-size: 0.82rem;
+      line-height: 1.8;
+    }
+    .result-box .ok  { color: #4ade80; }
+    .result-box .bad { color: #f87171; }
+    .result-box .key { color: #888; }
+
+    /* Legend row */
+    .legend { display: flex; gap: 1rem; font-size: 0.78rem; color: #888; flex-wrap: wrap; margin-top: 0.4rem; }
+    .legend-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; vertical-align: middle; margin-right: 3px; }
+
+    /* Error bar */
+    .err-bar-wrap { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.2rem; }
+    .err-bar-bg {
+      flex: 1;
+      height: 10px;
+      background: #1a1a1a;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .err-bar-fill { height: 100%; border-radius: 3px; transition: width 0.2s, background 0.2s; }
+    .err-bar-val { width: 60px; font-size: 0.75rem; color: #e0e0e0; text-align: right; }
+
+    /* Toggle buttons */
+    .btn-group { display: flex; gap: 0.5rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>JOSH Phase 1 — Focal Recovery &amp; Contact Detection</h1>
+  <span class="tag">Phase 1D</span>
+  <span class="tag">Phase 1F</span>
+  <span class="tag" style="background:#1a1a3a;color:#818cf8;">Interactive</span>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showTab(0)">1D — Focal Recovery</button>
+  <button class="tab-btn" onclick="showTab(1)">1F — Contact Detection</button>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB 1D — FOCAL RECOVERY
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div class="tab-panel active" id="tab0">
+  <h2>Phase 1D — Focal Length Recovery</h2>
+  <div class="explanation">
+    Given N 3-D points (from MASt3R depth estimation) and their 2-D image projections,
+    recover the camera focal length f and a depth shift δ via closed-form least-squares.
+    Model: u = f·(X/Z) + cx, v = f·(Y/Z) + cy.
+    The optimal f = Σ(A·b) / Σ(A²) where A=[X/Z, Y/Z], b=[u−cx, v−cy].
+    The depth shift δ is found by 3 Newton steps minimising reprojection error.
+  </div>
+
+  <div class="demo-area">
+    <canvas id="focalCanvas" width="420" height="320"></canvas>
+
+    <div class="controls">
+      <div class="slider-group">
+        <label>Noise level (pixels): <span id="noiseVal">0.0</span></label>
+        <input type="range" id="noiseSlider" min="0" max="5" step="0.1" value="0"
+               oninput="focalUpdate()">
+      </div>
+
+      <div class="slider-group">
+        <label>Number of points: <span id="nPtsVal">20</span></label>
+        <input type="range" id="nPtsSlider" min="3" max="60" step="1" value="20"
+               oninput="focalUpdate()">
+      </div>
+
+      <div class="slider-group">
+        <label>True focal length (px): <span id="trueFVal">300</span></label>
+        <input type="range" id="trueFSlider" min="100" max="600" step="10" value="300"
+               oninput="focalUpdate()">
+      </div>
+
+      <div class="result-box" id="focalResult">
+        <div><span class="key">True f: </span><span id="rTrueF">300</span> px</div>
+        <div><span class="key">Recovered f: </span><span id="rRecF">—</span> px</div>
+        <div><span class="key">Error: </span><span id="rErrF">—</span></div>
+        <div style="margin-top:0.4rem;"><span class="key">Depth shift δ: </span><span id="rDelta">—</span> m</div>
+        <div><span class="key">RMS reproj: </span><span id="rRMS">—</span> px</div>
+      </div>
+
+      <div>
+        <div style="font-size:0.78rem;color:#888;margin-bottom:0.3rem;">Relative error</div>
+        <div class="err-bar-wrap">
+          <div class="err-bar-bg"><div class="err-bar-fill" id="errBarFill" style="width:0%;background:#4ade80;"></div></div>
+          <div class="err-bar-val" id="errBarVal">0.0%</div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><span class="legend-dot" style="background:#4ade80;"></span>True projection</span>
+        <span><span class="legend-dot" style="background:#f87171;"></span>Noisy observation</span>
+        <span><span class="legend-dot" style="background:#60a5fa;"></span>Recovered reprojection</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB 1F — CONTACT DETECTION
+     ══════════════════════════════════════════════════════════════════════════ -->
+<div class="tab-panel" id="tab1">
+  <h2>Phase 1F — Contact Detection</h2>
+  <div class="explanation">
+    For each candidate foot/hand vertex:
+    (1) project to image using camera intrinsics,
+    (2) sample the depth map at the projected pixel,
+    (3) if |vertex_Z − depth_Z| &lt; threshold (default 5 cm) → contact.
+    Green vertices are in contact with the floor; red vertices are lifted.
+    Switch between "standing" (both feet down) and "walking" (one foot lifted).
+  </div>
+
+  <div class="demo-area">
+    <canvas id="contactCanvas" width="300" height="420"></canvas>
+
+    <div class="controls">
+      <div class="btn-group">
+        <button id="btnStanding" class="active-btn" onclick="setPose('standing')">Standing</button>
+        <button id="btnWalking"  onclick="setPose('walking')">Walking</button>
+        <button id="btnRunning"  onclick="setPose('running')">Running</button>
+      </div>
+
+      <div class="slider-group">
+        <label>Contact threshold (cm): <span id="threshVal">5</span></label>
+        <input type="range" id="threshSlider" min="1" max="20" step="1" value="5"
+               oninput="contactUpdate()">
+      </div>
+
+      <div class="slider-group">
+        <label>Depth noise (cm): <span id="depthNoiseVal">0</span></label>
+        <input type="range" id="depthNoiseSlider" min="0" max="10" step="1" value="0"
+               oninput="contactUpdate()">
+      </div>
+
+      <div class="result-box" id="contactResult" style="line-height:2;">
+        <!-- populated by JS -->
+      </div>
+
+      <div class="legend">
+        <span><span class="legend-dot" style="background:#4ade80;"></span>Contact</span>
+        <span><span class="legend-dot" style="background:#f87171;"></span>No contact</span>
+        <span><span class="legend-dot" style="background:#888;"></span>Other joint</span>
+      </div>
+
+      <div style="font-size:0.75rem;color:#555;line-height:1.6;">
+        Stick figure is a simplified 2-D projection of SMPL joints.<br>
+        Floor line = scene depth plane at Z = 2.0 m.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Tabs
+// ─────────────────────────────────────────────────────────────────────────────
+function showTab(i) {
+  document.querySelectorAll('.tab-panel').forEach((p,j) => p.classList.toggle('active', i===j));
+  document.querySelectorAll('.tab-btn').forEach((b,j)   => b.classList.toggle('active', i===j));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── TAB 1D: FOCAL RECOVERY ────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Minimal port of focal-recovery.ts (inline, no bundler) ──────────────────
+
+function recoverFocalLengthInline(pts3D, pts2D, W, H) {
+  const N  = pts3D.length / 3;
+  const cx = W / 2;
+  const cy = H / 2;
+
+  let num = 0, den = 0;
+  for (let i = 0; i < N; i++) {
+    const X = pts3D[i*3], Y = pts3D[i*3+1], Z = pts3D[i*3+2];
+    if (Z <= 0) continue;
+    const aX = X/Z, aY = Y/Z;
+    const bX = pts2D[i*2]   - cx;
+    const bY = pts2D[i*2+1] - cy;
+    num += aX*bX + aY*bY;
+    den += aX*aX + aY*aY;
+  }
+  const f = den > 0 ? num / den : 1;
+
+  // depth shift via 3 Newton steps
+  let delta = 0;
+  for (let iter = 0; iter < 3; iter++) {
+    let grad = 0, hess = 0;
+    for (let i = 0; i < N; i++) {
+      const X = pts3D[i*3], Y = pts3D[i*3+1];
+      const Z = pts3D[i*3+2] + delta;
+      if (Z <= 0) continue;
+      const Z2 = Z*Z;
+      const rx = f*(X/Z) + cx - pts2D[i*2];
+      const ry = f*(Y/Z) + cy - pts2D[i*2+1];
+      const drdX = -f*X/Z2, drdY = -f*Y/Z2;
+      grad += rx*drdX + ry*drdY;
+      hess += drdX*drdX + drdY*drdY;
+    }
+    if (Math.abs(hess) < 1e-12) break;
+    delta -= grad / hess;
+  }
+
+  // RMS
+  let sse = 0, cnt = 0;
+  for (let i = 0; i < N; i++) {
+    const X = pts3D[i*3], Y = pts3D[i*3+1], Z = pts3D[i*3+2] + delta;
+    if (Z <= 0) continue;
+    const du = f*(X/Z) + cx - pts2D[i*2];
+    const dv = f*(Y/Z) + cy - pts2D[i*2+1];
+    sse += du*du + dv*dv; cnt++;
+  }
+  const rms = cnt > 0 ? Math.sqrt(sse/cnt) : 0;
+  return { focalLength: f, depthShift: delta, rms };
+}
+
+// ── Deterministic synthetic scene ────────────────────────────────────────────
+function buildScene(N, trueF, noise) {
+  const W = 420, H = 320;
+  const cx = W/2, cy = H/2;
+  const pts3D  = new Float32Array(N*3);
+  const pts2D  = new Float32Array(N*2);
+  const trueUV = new Float32Array(N*2);
+
+  for (let i = 0; i < N; i++) {
+    const angle  = (i/N)*2*Math.PI;
+    const radius = 0.25 + 0.15 * Math.abs(Math.sin(i*1.7));
+    const X = radius * Math.cos(angle);
+    const Y = radius * Math.sin(angle) * 0.6;
+    const Z = 1.8 + 0.5 * Math.abs(Math.sin(i*0.9));
+    pts3D[i*3] = X; pts3D[i*3+1] = Y; pts3D[i*3+2] = Z;
+
+    const u = trueF*(X/Z) + cx;
+    const v = trueF*(Y/Z) + cy;
+    trueUV[i*2] = u; trueUV[i*2+1] = v;
+
+    const nu = noise * Math.sin(i*2.3+0.1);
+    const nv = noise * Math.cos(i*1.9+0.5);
+    pts2D[i*2]   = u + nu;
+    pts2D[i*2+1] = v + nv;
+  }
+  return { pts3D, pts2D, trueUV, cx, cy, W, H };
+}
+
+function focalUpdate() {
+  const noise  = parseFloat(document.getElementById('noiseSlider').value);
+  const N      = parseInt(document.getElementById('nPtsSlider').value);
+  const trueF  = parseFloat(document.getElementById('trueFSlider').value);
+  document.getElementById('noiseVal').textContent  = noise.toFixed(1);
+  document.getElementById('nPtsVal').textContent   = N;
+  document.getElementById('trueFVal').textContent  = trueF;
+
+  const { pts3D, pts2D, trueUV, cx, cy, W, H } = buildScene(N, trueF, noise);
+  const res = recoverFocalLengthInline(pts3D, pts2D, W, H);
+
+  const relErr = Math.abs(res.focalLength - trueF) / trueF;
+  const pct    = (relErr * 100).toFixed(2);
+  const errColor = relErr < 0.01 ? 'ok' : relErr < 0.05 ? '' : 'bad';
+
+  document.getElementById('rTrueF').textContent = trueF.toFixed(0);
+  document.getElementById('rRecF').textContent  = res.focalLength.toFixed(2);
+  document.getElementById('rErrF').innerHTML    = `<span class="${errColor}">${pct}%</span>`;
+  document.getElementById('rDelta').textContent = res.depthShift.toFixed(4);
+  document.getElementById('rRMS').textContent   = res.rms.toFixed(3);
+
+  // Error bar
+  const barPct = Math.min(relErr * 100 * 4, 100); // 25% error = full bar
+  document.getElementById('errBarFill').style.width      = barPct + '%';
+  document.getElementById('errBarFill').style.background = relErr < 0.01 ? '#4ade80' : relErr < 0.05 ? '#fbbf24' : '#f87171';
+  document.getElementById('errBarVal').textContent = pct + '%';
+
+  // Draw canvas
+  drawFocalCanvas(pts3D, pts2D, trueUV, res, cx, cy, W, H, trueF);
+}
+
+function drawFocalCanvas(pts3D, pts2D, trueUV, res, cx, cy, W, H, trueF) {
+  const canvas = document.getElementById('focalCanvas');
+  const ctx    = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // Background
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  // Principal point crosshair
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(W,cy); ctx.stroke();
+  ctx.setLineDash([]);
+
+  const N = pts3D.length / 3;
+  const { focalLength: recF, depthShift: delta } = res;
+
+  for (let i = 0; i < N; i++) {
+    const X = pts3D[i*3], Y = pts3D[i*3+1], Z = pts3D[i*3+2] + delta;
+    if (Z <= 0) continue;
+
+    const uTrue = trueUV[i*2],   vTrue = trueUV[i*2+1];
+    const uObs  = pts2D[i*2],    vObs  = pts2D[i*2+1];
+    const uRec  = recF*(X/Z)+cx, vRec  = recF*(Y/Z)+cy;
+
+    // Line from true to observed (error vector)
+    ctx.strokeStyle = 'rgba(248,113,113,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(uTrue, vTrue); ctx.lineTo(uObs, vObs); ctx.stroke();
+
+    // Line from observed to recovered
+    ctx.strokeStyle = 'rgba(96,165,250,0.35)';
+    ctx.beginPath(); ctx.moveTo(uObs, vObs); ctx.lineTo(uRec, vRec); ctx.stroke();
+
+    // True projection (green)
+    ctx.fillStyle = '#4ade80';
+    ctx.beginPath(); ctx.arc(uTrue, vTrue, 3.5, 0, Math.PI*2); ctx.fill();
+
+    // Noisy observation (red)
+    ctx.fillStyle = '#f87171';
+    ctx.beginPath(); ctx.arc(uObs, vObs, 2.5, 0, Math.PI*2); ctx.fill();
+
+    // Recovered reprojection (blue)
+    ctx.fillStyle = '#60a5fa';
+    ctx.beginPath(); ctx.arc(uRec, vRec, 2, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Labels
+  ctx.font = '11px system-ui';
+  ctx.fillStyle = '#555';
+  ctx.fillText(`cx=${cx}, cy=${cy}`, 6, H-8);
+  ctx.fillStyle = '#888';
+  ctx.fillText(`f_true=${trueF}  f_rec=${recF.toFixed(1)}`, 6, 16);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── TAB 1F: CONTACT DETECTION ────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FLOOR_Z = 2.0;   // metres, depth map constant
+const FX = 200, FY = 200, CCX = 150, CCY = 210;
+const IMG_W = 300, IMG_H = 420;
+
+// SMPL-like 2-D stick figure joint positions (canvas pixels, front view)
+// Indices: 0=pelvis,1=lHip,2=rHip,3=spine,4=lKnee,5=rKnee,
+//          6=lAnkle,7=rAnkle,8=lFoot,9=rFoot,10=neck,11=head,
+//          12=lShoulder,13=rShoulder,14=lElbow,15=rElbow,16=lWrist,17=rWrist
+// These are CANVAS pixel coords for drawing.
+const BASE_JOINTS_PX = [
+  [150, 230],  // 0 pelvis
+  [170, 250],  // 1 lHip
+  [130, 250],  // 2 rHip
+  [150, 195],  // 3 spine
+  [175, 305],  // 4 lKnee
+  [125, 305],  // 5 rKnee
+  [178, 360],  // 6 lAnkle
+  [122, 360],  // 7 rAnkle
+  [182, 390],  // 8 lFoot
+  [118, 390],  // 9 rFoot
+  [150, 162],  //10 neck
+  [150, 130],  //11 head
+  [190, 180],  //12 lShoulder
+  [110, 180],  //13 rShoulder
+  [210, 230],  //14 lElbow
+  [ 90, 230],  //15 rElbow
+  [220, 275],  //16 lWrist
+  [ 80, 275],  //17 rWrist
+];
+
+const BONES = [
+  [0,1],[0,2],[0,3],[1,4],[2,5],[4,6],[5,7],[6,8],[7,9],
+  [3,10],[10,11],[10,12],[10,13],[12,14],[13,15],[14,16],[15,17]
+];
+
+// Foot candidate vertex indices (8 & 9 = feet)
+const FOOT_INDICES = [8, 9];
+
+// Pose definitions: each joint offset from BASE in pixels, plus 3-D Z offset for feet
+const POSES = {
+  standing: {
+    label: 'Standing',
+    // No offset from base
+    offsets: {},
+    // foot Z (relative to floor — 0 = on floor, positive = lifted)
+    lFootLift: 0,
+    rFootLift: 0,
+  },
+  walking: {
+    label: 'Walking',
+    offsets: {
+      4: [5, -20],   // lKnee forward
+      6: [10, -35],  // lAnkle forward
+      8: [12, -40],  // lFoot lifted & forward
+      5: [-5, 5],    // rKnee back
+      7: [-8, 0],    // rAnkle
+      9: [-8, 0],    // rFoot on floor
+    },
+    lFootLift: 0.18,  // left foot 18 cm above floor
+    rFootLift: 0,
+  },
+  running: {
+    label: 'Running',
+    offsets: {
+      4: [15, -40],  // lKnee high
+      6: [18, -65],  // lAnkle high
+      8: [20, -75],  // lFoot high
+      5: [-10, 15],  // rKnee behind
+      7: [-12, 5],
+      9: [-12, 0],
+      14: [-20, -30], // lElbow swing
+      15: [ 20, -30], // rElbow swing
+      16: [-25, -50],
+      17: [ 25, -50],
+    },
+    lFootLift: 0.35,
+    rFootLift: 0,
+  },
+};
+
+let currentPose = 'standing';
+
+function setPose(name) {
+  currentPose = name;
+  ['standing','walking','running'].forEach(p => {
+    document.getElementById('btn' + p.charAt(0).toUpperCase() + p.slice(1))
+      .classList.toggle('active-btn', p === name);
+  });
+  contactUpdate();
+}
+
+function getPoseJoints(poseName) {
+  const pose = POSES[poseName];
+  return BASE_JOINTS_PX.map((j, i) => {
+    const off = pose.offsets[i] || [0, 0];
+    return [j[0] + off[0], j[1] + off[1]];
+  });
+}
+
+// Convert canvas pixel position (for a foot) to 3-D point in camera coords.
+// We use a simple inverse projection: X=(u-cx)/fx*Z, Y=(v-cy)/fy*Z
+function px2Cam(u, v, Z) {
+  return [(u - CCX) / FX * Z, (v - CCY) / FY * Z, Z];
+}
+
+// Detect contacts (inline port of contact-detection.ts)
+function detectContactsInline(vertices3D, depthMap, dW, dH, candIndices, fx, fy, cx, cy, thresh) {
+  const isContact = [];
+  const contactIdx = [];
+
+  for (let ci = 0; ci < candIndices.length; ci++) {
+    const vi = candIndices[ci];
+    const X = vertices3D[vi*3], Y = vertices3D[vi*3+1], Z = vertices3D[vi*3+2];
+
+    if (Z <= 0) { isContact.push(false); continue; }
+
+    const u = fx*(X/Z) + cx;
+    const v = fy*(Y/Z) + cy;
+
+    if (u < 0 || v < 0 || u > dW-1 || v > dH-1) { isContact.push(false); continue; }
+
+    const x0 = Math.floor(u), y0 = Math.floor(v);
+    const x1 = Math.min(x0+1, dW-1), y1 = Math.min(y0+1, dH-1);
+    const tx = u-x0, ty = v-y0;
+    const d = (1-tx)*(1-ty)*depthMap[y0*dW+x0]
+            +    tx *(1-ty)*depthMap[y0*dW+x1]
+            + (1-tx)*   ty *depthMap[y1*dW+x0]
+            +    tx *   ty *depthMap[y1*dW+x1];
+
+    const contact = Math.abs(Z - d) < thresh;
+    isContact.push(contact);
+    if (contact) contactIdx.push(vi);
+  }
+  return { isContact, contactIdx };
+}
+
+function contactUpdate() {
+  const threshCm    = parseInt(document.getElementById('threshSlider').value);
+  const depthNoise  = parseInt(document.getElementById('depthNoiseSlider').value) / 100; // metres
+  document.getElementById('threshVal').textContent     = threshCm;
+  document.getElementById('depthNoiseVal').textContent = depthNoise * 100;
+
+  const thresh = threshCm / 100; // metres
+
+  // Build depth map: flat floor at FLOOR_Z + deterministic noise
+  const dW = IMG_W, dH = IMG_H;
+  const depthMap = new Float32Array(dW * dH);
+  for (let i = 0; i < dW * dH; i++) {
+    depthMap[i] = FLOOR_Z + depthNoise * Math.sin(i * 0.07) * 0.5;
+  }
+
+  const pose = POSES[currentPose];
+  const joints = getPoseJoints(currentPose);
+
+  // Build 3-D vertices for all joints (using their canvas positions to back-project)
+  // Feet use their lift offset from FLOOR_Z
+  const V = joints.length;
+  const verts3D = new Float32Array(V * 3);
+  for (let i = 0; i < V; i++) {
+    let Z = FLOOR_Z;
+    if (i === 8)  Z = FLOOR_Z - pose.lFootLift;
+    if (i === 9)  Z = FLOOR_Z - pose.rFootLift;
+    const [X, Y] = px2Cam(joints[i][0], joints[i][1], Z);
+    verts3D[i*3] = X; verts3D[i*3+1] = Y; verts3D[i*3+2] = Z;
+  }
+
+  const result = detectContactsInline(
+    verts3D, depthMap, dW, dH, FOOT_INDICES,
+    FX, FY, CCX, CCY, thresh
+  );
+
+  // Update result box
+  const lContact = result.isContact[0];
+  const rContact = result.isContact[1];
+  const lLabel = lContact ? '<span class="ok">CONTACT</span>' : '<span class="bad">NO CONTACT</span>';
+  const rLabel = rContact ? '<span class="ok">CONTACT</span>' : '<span class="bad">NO CONTACT</span>';
+  document.getElementById('contactResult').innerHTML = `
+    <div><span class="key">Left foot:  </span>${lLabel}</div>
+    <div><span class="key">Right foot: </span>${rLabel}</div>
+    <div style="margin-top:0.3rem;"><span class="key">Threshold: </span>${threshCm} cm</div>
+    <div><span class="key">Left lift:  </span>${(pose.lFootLift*100).toFixed(0)} cm</div>
+    <div><span class="key">Right lift: </span>${(pose.rFootLift*100).toFixed(0)} cm</div>
+  `;
+
+  drawContactCanvas(joints, result, pose);
+}
+
+function drawContactCanvas(joints, result, pose) {
+  const canvas = document.getElementById('contactCanvas');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Background
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  // Floor line
+  const floorY = BASE_JOINTS_PX[8][1] + 10; // just below the base foot position
+  ctx.strokeStyle = '#2a4a2a';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 4]);
+  ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(W, floorY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#2a4a2a';
+  ctx.font = '10px system-ui';
+  ctx.fillText('floor (depth = 2.0 m)', 8, floorY - 4);
+
+  // Depth map noise hint
+  const noise = parseInt(document.getElementById('depthNoiseSlider').value);
+  if (noise > 0) {
+    ctx.fillStyle = '#2a2a1a';
+    for (let x = 0; x < W; x += 6) {
+      const y = floorY + noise * Math.sin(x * 0.07) * 2;
+      ctx.fillRect(x, y, 4, 4);
+    }
+  }
+
+  // Skeleton bones
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 2.5;
+  for (const [a, b] of BONES) {
+    ctx.beginPath();
+    ctx.moveTo(joints[a][0], joints[a][1]);
+    ctx.lineTo(joints[b][0], joints[b][1]);
+    ctx.stroke();
+  }
+
+  // Joints
+  for (let i = 0; i < joints.length; i++) {
+    const [x, y] = joints[i];
+    let color = '#888';
+
+    const footIdx = FOOT_INDICES.indexOf(i);
+    if (footIdx !== -1) {
+      color = result.isContact[footIdx] ? '#4ade80' : '#f87171';
+    }
+
+    // Glow for feet
+    if (footIdx !== -1) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur  = 12;
+    }
+
+    ctx.fillStyle = color;
+    const r = footIdx !== -1 ? 7 : 5;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+
+    ctx.shadowBlur = 0;
+  }
+
+  // Head circle
+  const [hx, hy] = joints[11];
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(hx, hy, 18, 0, Math.PI*2); ctx.stroke();
+
+  // Lift annotations for feet
+  for (let fi = 0; fi < FOOT_INDICES.length; fi++) {
+    const vi = FOOT_INDICES[fi];
+    const [fx2, fy2] = joints[vi];
+    const label = fi === 0 ? 'L' : 'R';
+    const liftM = fi === 0 ? pose.lFootLift : pose.rFootLift;
+    ctx.fillStyle = result.isContact[fi] ? '#4ade80' : '#f87171';
+    ctx.font = 'bold 10px system-ui';
+    ctx.fillText(`${label}: ${(liftM*100).toFixed(0)}cm`, fx2 + (fi===0 ? 6 : -28), fy2 - 10);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────────────────────────
+focalUpdate();
+contactUpdate();
+</script>
+</body>
+</html>
