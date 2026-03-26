@@ -1,12 +1,12 @@
-// JOSH Depth Reprojection Loss Gradient Kernel
+// JOSH Depth Reprojection Loss (L_3D) — Phase 0C
 //
-// Computes gradient of depth reprojection loss: penalizes SMPL mesh vertices
-// whose projected depth doesn't match the estimated depth map.
+// Computes gradient of the 3D depth correspondence loss: penalises SMPL
+// mesh vertices whose projected depth doesn't match the MASt3R/MiDAS depth map.
 //
-// L_reproj = sum_v || z_vertex_v - depth_map(proj(v)) ||^2
+//   L_3D = Σ_v ‖v_z - depth_map(proj(v))‖²
 //
-// This loss ensures the reconstructed human mesh is consistent with
-// the monocular depth estimation from Node A.
+// Gradient dL_3D/dv is output additively into dl_dv [V,3].
+// Only the depth (Z) component of each vertex receives gradient.
 
 struct Params {
   width: u32,
@@ -21,55 +21,40 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read> vertices: array<f32>;       // [V, 3]
 @group(0) @binding(1) var<storage, read> depth_map: array<f32>;      // [H, W]
-@group(0) @binding(2) var<storage, read_write> gradient: array<f32>; // [param_dim]
-@group(0) @binding(3) var<storage, read_write> loss: array<f32>;     // [4]
-@group(0) @binding(4) var<uniform> params: Params;
+@group(0) @binding(2) var<storage, read_write> dl_dv: array<f32>;    // [V*3] per-vertex gradient
+@group(0) @binding(3) var<storage, read_write> loss_out: array<f32>; // [1]
+@group(0) @binding(4) var<uniform> p: Params;
 
 @compute @workgroup_size(256, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let vid = gid.x;
-  if (vid >= params.vertex_count) {
-    return;
-  }
+  if (vid >= p.vertex_count) { return; }
 
   let vx = vertices[vid * 3u];
   let vy = vertices[vid * 3u + 1u];
   let vz = vertices[vid * 3u + 2u];
 
-  if (vz <= 0.01) {
-    return;
-  }
+  if (vz <= 0.01) { return; }
 
-  // Project to image
-  let u = params.fx * vx / vz + params.cx;
-  let v = params.fy * vy / vz + params.cy;
+  // Project vertex to image plane
+  let u = p.fx * vx / vz + p.cx;
+  let v = p.fy * vy / vz + p.cy;
 
   let ui = i32(round(u));
   let vi_img = i32(round(v));
 
-  if (ui < 0 || ui >= i32(params.width) || vi_img < 0 || vi_img >= i32(params.height)) {
-    return;
-  }
+  if (ui < 0 || ui >= i32(p.width) || vi_img < 0 || vi_img >= i32(p.height)) { return; }
 
-  let depth_idx = u32(vi_img) * params.width + u32(ui);
-  let scene_depth = depth_map[depth_idx];
+  let depth_idx = u32(vi_img) * p.width + u32(ui);
+  let scene_z = depth_map[depth_idx];
+  if (scene_z <= 0.1 || scene_z >= 99.0) { return; }
 
-  // Skip invalid depth values
-  if (scene_depth <= 0.1 || scene_depth >= 99.0) {
-    return;
-  }
+  // Depth residual
+  let err = vz - scene_z;
 
-  // Reprojection error
-  let error = vz - scene_depth;
-  let reproj_loss = params.weight * error * error;
+  // Loss accumulation
+  loss_out[0] += p.weight * err * err;
 
-  // Accumulate loss component
-  loss[1] += reproj_loss;
-
-  // Gradient contribution to depth scale (parameter 88)
-  // d(loss)/d(scale) = weight * 2 * error * d(error)/d(scale)
-  gradient[88] += params.weight * 2.0 * error * (-scene_depth);
-
-  // Gradient contribution to camera translation Z (parameter 84)
-  gradient[84] += params.weight * 2.0 * error;
+  // Gradient dL/dvz = 2 × weight × err
+  dl_dv[vid * 3u + 2u] += 2.0 * p.weight * err;
 }
