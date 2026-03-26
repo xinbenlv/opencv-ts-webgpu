@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Phase 3C — Timeline Playback Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    #header { padding: 10px 16px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 16px; }
+    #header h1 { font-size: 15px; font-weight: 600; }
+    #header .badge { font-size: 11px; padding: 2px 8px; background: #1f6feb; border-radius: 12px; }
+    #main { flex: 1; display: flex; overflow: hidden; }
+    #webgpu-canvas { flex: 1; display: block; background: #1a1a2e; }
+    #sidebar { width: 200px; background: #161b22; border-left: 1px solid #30363d; padding: 12px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+    #sidebar h3 { font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-row { font-size: 13px; display: flex; justify-content: space-between; }
+    .stat-val { color: #58a6ff; font-family: monospace; }
+    .toggle-btn { width: 100%; padding: 6px; background: #21262d; border: 1px solid #30363d; color: #e6edf3; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .toggle-btn.active { background: #1f6feb; border-color: #1f6feb; }
+    #timeline-canvas { height: 110px; width: 100%; background: #0d1117; border-top: 1px solid #30363d; display: block; flex-shrink: 0; }
+    #status { padding: 4px 16px; font-size: 11px; color: #8b949e; background: #161b22; border-top: 1px solid #30363d; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1>Phase 3C — Timeline Playback</h1>
+    <span class="badge">WebGPU</span>
+    <span id="fps-badge" style="font-size:11px;color:#8b949e;">30 synthetic frames · 5 FPS playback</span>
+  </div>
+  <div id="main">
+    <canvas id="webgpu-canvas"></canvas>
+    <div id="sidebar">
+      <h3>Playback</h3>
+      <div class="stat-row"><span>Frame</span><span class="stat-val" id="s-frame">0 / 30</span></div>
+      <div class="stat-row"><span>Loss</span><span class="stat-val" id="s-loss">—</span></div>
+      <div class="stat-row"><span>FPS</span><span class="stat-val" id="s-fps">5</span></div>
+      <h3 style="margin-top:4px;">View</h3>
+      <button class="toggle-btn active" id="btn-mesh" onclick="toggleView('mesh')">Mesh</button>
+      <button class="toggle-btn" id="btn-cloud" onclick="toggleView('cloud')">Point Cloud</button>
+      <button class="toggle-btn" id="btn-both" onclick="toggleView('both')">Both</button>
+      <h3 style="margin-top:4px;">Camera</h3>
+      <div class="stat-row"><span>Angle</span><span class="stat-val" id="s-angle">0°</span></div>
+      <div style="font-size:11px;color:#8b949e;margin-top:4px;">Drag canvas to orbit</div>
+    </div>
+  </div>
+  <canvas id="timeline-canvas"></canvas>
+  <div id="status" id="status-bar">Initializing...</div>
+
+  <script type="module">
+    import { Timeline } from './josh/ui/timeline.ts';
+
+    const NUM_FRAMES = 30;
+    const PLAYBACK_FPS = 5;
+
+    // Fake loss values: exponentially decaying per frame
+    const losses = Array.from({ length: NUM_FRAMES }, (_, i) =>
+      2.5 * Math.exp(-i * 0.12) + 0.05 * Math.random()
+    );
+
+    // ── Timeline setup ──────────────────────────────────────────────────────
+    const timelineCanvas = document.getElementById('timeline-canvas');
+
+    function resizeTimeline() {
+      timelineCanvas.width = window.innerWidth;
+      timelineCanvas.height = 110;
+    }
+    resizeTimeline();
+    window.addEventListener('resize', () => { resizeTimeline(); timeline.render(); });
+
+    let currentFrame = 0;
+
+    const timeline = new Timeline({
+      canvas: timelineCanvas,
+      onFrameChange: (fi) => {
+        currentFrame = fi;
+        updateSidebar(fi);
+        drawSMPLFrame(fi);
+      },
+    });
+
+    timeline.setFrameCount(NUM_FRAMES);
+    timeline.setPlaybackFPS(PLAYBACK_FPS);
+
+    // Feed all loss values upfront (simulating post-optimization)
+    for (let i = 0; i < NUM_FRAMES; i++) {
+      timeline.setFrameResult(i, losses[i]);
+    }
+    timeline.render();
+
+    // ── WebGPU canvas ────────────────────────────────────────────────────────
+    const wgpuCanvas = document.getElementById('webgpu-canvas');
+
+    function resizeWGPU() {
+      wgpuCanvas.width = wgpuCanvas.clientWidth;
+      wgpuCanvas.height = wgpuCanvas.clientHeight;
+    }
+    resizeWGPU();
+    window.addEventListener('resize', resizeWGPU);
+
+    let viewMode = 'mesh';
+    let orbitAngle = 0;
+    let isDragging = false;
+    let lastMouseX = 0;
+
+    wgpuCanvas.addEventListener('mousedown', (e) => { isDragging = true; lastMouseX = e.clientX; });
+    window.addEventListener('mouseup', () => { isDragging = false; });
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      orbitAngle += (e.clientX - lastMouseX) * 0.5;
+      lastMouseX = e.clientX;
+      document.getElementById('s-angle').textContent = Math.round(orbitAngle % 360) + '°';
+      drawSMPLFrame(currentFrame);
+    });
+
+    // Fallback 2D canvas renderer (used when WebGPU not available or as skeleton)
+    const ctx2d = wgpuCanvas.getContext('2d');
+    let useWebGPU = false;
+
+    async function initWebGPU() {
+      if (!navigator.gpu) {
+        document.getElementById('status').textContent = 'WebGPU not available — using canvas 2D fallback';
+        return false;
+      }
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) throw new Error('no adapter');
+        document.getElementById('status').textContent = 'WebGPU ready — rendering synthetic SMPL frames';
+        return true;
+      } catch (e) {
+        document.getElementById('status').textContent = 'WebGPU init failed: ' + e.message + ' — using canvas 2D';
+        return false;
+      }
+    }
+
+    // ── Synthetic SMPL skeleton ──────────────────────────────────────────────
+    // 24 joints in T-pose with simple bone structure for demo rendering
+    const JOINTS_TPOSE = [
+      [0, 0.9, 0],    // 0 pelvis
+      [-0.1, 0.85, 0], // 1 L hip
+      [0.1, 0.85, 0],  // 2 R hip
+      [0, 0.75, 0],    // 3 spine1
+      [-0.15, 0.55, 0], // 4 L knee
+      [0.15, 0.55, 0],  // 5 R knee
+      [0, 0.65, 0],    // 6 spine2
+      [-0.18, 0.28, 0], // 7 L ankle
+      [0.18, 0.28, 0],  // 8 R ankle
+      [0, 0.55, 0],    // 9 spine3
+      [-0.2, 0.12, 0], // 10 L foot
+      [0.2, 0.12, 0],  // 11 R foot
+      [0, 1.35, 0],    // 12 neck
+      [-0.22, 1.2, 0], // 13 L collar
+      [0.22, 1.2, 0],  // 14 R collar
+      [0, 1.5, 0],     // 15 head
+      [-0.5, 1.2, 0],  // 16 L shoulder
+      [0.5, 1.2, 0],   // 17 R shoulder
+      [-0.75, 1.0, 0], // 18 L elbow
+      [0.75, 1.0, 0],  // 19 R elbow
+      [-0.75, 0.75, 0],// 20 L wrist
+      [0.75, 0.75, 0], // 21 R wrist
+      [-0.8, 0.65, 0], // 22 L hand
+      [0.8, 0.65, 0],  // 23 R hand
+    ];
+
+    const BONES = [
+      [0,1],[0,2],[0,3],[1,4],[2,5],[3,6],[4,7],[5,8],[6,9],
+      [7,10],[8,11],[9,12],[9,13],[9,14],[12,15],[13,16],[14,17],
+      [16,18],[17,19],[18,20],[19,21],[20,22],[21,23]
+    ];
+
+    function projectJoint(j, frameIdx, orbitDeg) {
+      const [x, y, z] = j;
+      // Apply slight per-frame pose variation (sway)
+      const sway = Math.sin(frameIdx * 0.3) * 0.04;
+      const px = x + sway;
+      const py = y - 0.8; // center vertically
+      // Camera arc
+      const rad = orbitDeg * Math.PI / 180;
+      const pxR = px * Math.cos(rad) - z * Math.sin(rad);
+      const pyR = py;
+      // Project to canvas
+      const W = wgpuCanvas.width, H = wgpuCanvas.height;
+      const scale = Math.min(W, H) * 0.38;
+      return [W/2 + pxR * scale, H/2 - pyR * scale];
+    }
+
+    function drawSMPLFrame(frameIdx) {
+      if (!ctx2d) return;
+      const W = wgpuCanvas.width, H = wgpuCanvas.height;
+      ctx2d.clearRect(0, 0, W, H);
+
+      // Background gradient
+      const grad = ctx2d.createRadialGradient(W/2, H/2, 0, W/2, H/2, Math.max(W,H)/2);
+      grad.addColorStop(0, '#1a1a2e');
+      grad.addColorStop(1, '#0d1117');
+      ctx2d.fillStyle = grad;
+      ctx2d.fillRect(0, 0, W, H);
+
+      const projJoints = JOINTS_TPOSE.map(j => projectJoint(j, frameIdx, orbitAngle));
+
+      if (viewMode !== 'cloud') {
+        // Draw bones
+        ctx2d.strokeStyle = '#4d9de0';
+        ctx2d.lineWidth = 3;
+        ctx2d.lineCap = 'round';
+        for (const [a, b] of BONES) {
+          const [ax, ay] = projJoints[a];
+          const [bx, by] = projJoints[b];
+          ctx2d.beginPath();
+          ctx2d.moveTo(ax, ay);
+          ctx2d.lineTo(bx, by);
+          ctx2d.stroke();
+        }
+
+        // Draw joints
+        for (let i = 0; i < projJoints.length; i++) {
+          const [px, py] = projJoints[i];
+          ctx2d.beginPath();
+          ctx2d.arc(px, py, 5, 0, Math.PI*2);
+          ctx2d.fillStyle = i === 0 ? '#e74c3c' : '#58a6ff';
+          ctx2d.fill();
+        }
+      }
+
+      if (viewMode !== 'mesh') {
+        // Point cloud: random points around skeleton
+        ctx2d.fillStyle = 'rgba(0,200,100,0.4)';
+        const rng = frameIdx * 12345;
+        for (let i = 0; i < 800; i++) {
+          const ji = Math.floor(((rng * (i+1) * 1103515245 + 12345) & 0x7fffffff) % 24);
+          const [cx, cy] = projJoints[ji];
+          const ox = ((rng * i * 1664525 + 1013904223) & 0xfff) / 0xfff * 30 - 15;
+          const oy = ((rng * i * 22695477 + 1) & 0xfff) / 0xfff * 30 - 15;
+          ctx2d.fillRect(cx + ox, cy + oy, 2, 2);
+        }
+      }
+
+      // Loss overlay
+      const loss = losses[frameIdx];
+      const hue = Math.round((1 - Math.min(loss / 2.5, 1)) * 120);
+      ctx2d.fillStyle = `hsla(${hue},80%,50%,0.15)`;
+      ctx2d.fillRect(0, 0, 80, 24);
+      ctx2d.fillStyle = `hsl(${hue},80%,60%)`;
+      ctx2d.font = '11px monospace';
+      ctx2d.fillText(`loss: ${loss.toFixed(4)}`, 6, 16);
+    }
+
+    function updateSidebar(fi) {
+      document.getElementById('s-frame').textContent = `${fi} / ${NUM_FRAMES}`;
+      document.getElementById('s-loss').textContent = losses[fi].toFixed(4);
+    }
+
+    window.toggleView = function(mode) {
+      viewMode = mode;
+      ['mesh','cloud','both'].forEach(m => {
+        document.getElementById('btn-' + m).classList.toggle('active', m === mode);
+      });
+      drawSMPLFrame(currentFrame);
+    };
+
+    // ── Init ─────────────────────────────────────────────────────────────────
+    useWebGPU = await initWebGPU();
+    drawSMPLFrame(0);
+    updateSidebar(0);
+
+    // Draw timeline every animation frame to keep it interactive
+    function loop() {
+      timeline.render();
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>
