@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { copyFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
-// Copy ORT WASM binary to demo/assets/ort/ (only the .wasm, not .mjs)
+// Copy ORT WASM binary to demo/assets/ort/
 function copyOrtWasmFiles() {
   const ortDist = resolve(__dirname, 'node_modules/onnxruntime-web/dist');
   const dest = resolve(__dirname, 'demo/assets/ort');
@@ -20,29 +20,41 @@ function copyOrtWasmFiles() {
 copyOrtWasmFiles();
 
 /**
- * Vite plugin that serves ORT's .mjs worker file directly from node_modules.
- * ORT dynamically imports this file for the WebGPU backend, but Vite's
- * dep optimizer can't handle it (it's a worker, not a regular module).
+ * Vite plugin that intercepts ORT's .mjs worker and .wasm requests.
+ *
+ * ORT dynamically imports ort-wasm-simd-threaded.jsep.mjs for its WASM backend.
+ * When ORT is excluded from optimizeDeps, Vite serves it via @fs/ and appends
+ * ?import to dynamic imports, which can break resolution. This middleware
+ * intercepts ALL requests containing the ORT worker filename and serves
+ * the file directly from node_modules.
  */
 function ortWorkerPlugin(): Plugin {
   const ortDist = resolve(__dirname, 'node_modules/onnxruntime-web/dist');
   return {
     name: 'ort-worker-serve',
+    enforce: 'pre',
     configureServer(server) {
+      // Use server.middlewares.use with a path prefix that runs BEFORE Vite's transform
       server.middlewares.use((req, res, next) => {
-        // Intercept requests for ORT .mjs files
-        if (req.url && req.url.includes('ort-wasm-simd-threaded') && req.url.endsWith('.mjs')) {
-          // Extract just the filename
-          const filename = req.url.split('/').pop()!.split('?')[0]!;
-          const filePath = resolve(ortDist, filename);
-          if (existsSync(filePath)) {
-            const content = readFileSync(filePath);
-            res.setHeader('Content-Type', 'text/javascript');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.end(content);
-            return;
+        if (!req.url) return next();
+        const url = req.url;
+
+        // Match any request for ORT's worker .mjs (with or without ?import, @fs prefix, etc)
+        if (url.includes('ort-wasm-simd-threaded') && url.includes('.mjs')) {
+          // Extract the filename (strip query params and path)
+          const match = url.match(/(ort-wasm-simd-threaded[^/?]*\.mjs)/);
+          if (match) {
+            const filePath = resolve(ortDist, match[1]!);
+            if (existsSync(filePath)) {
+              const content = readFileSync(filePath);
+              res.setHeader('Content-Type', 'text/javascript');
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.end(content);
+              return;
+            }
           }
         }
+
         next();
       });
     },
@@ -63,7 +75,6 @@ export default defineConfig({
     },
   },
 
-  // HTTPS + Cross-Origin Isolation headers for SharedArrayBuffer + WebGPU
   server: {
     host: '0.0.0.0',
     headers: {
@@ -84,10 +95,8 @@ export default defineConfig({
     },
   },
 
-  // WGSL files imported as raw strings
   assetsInclude: ['**/*.wgsl'],
 
-  // Don't let Vite rewrite ORT's internal dynamic imports
   optimizeDeps: {
     exclude: ['onnxruntime-web'],
   },
