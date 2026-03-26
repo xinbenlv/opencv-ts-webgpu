@@ -49,12 +49,22 @@ async function getOrt() {
 }
 
 /**
- * Fetch model as ArrayBuffer (works around COEP fetch issues).
+ * Fetch model as ArrayBuffer with retry logic for large files over slow networks.
  */
-async function fetchModelBuffer(url: string): Promise<ArrayBuffer> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${url}`);
-  return response.arrayBuffer();
+async function fetchModelBuffer(url: string, retries = 3): Promise<ArrayBuffer> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`[HMR] Fetch attempt ${attempt}/${retries}: ${url}`);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${url}`);
+      return await response.arrayBuffer();
+    } catch (e) {
+      if (attempt === retries) throw e;
+      console.warn(`[HMR] Fetch attempt ${attempt} failed, retrying in 2s...`, e);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  throw new Error('unreachable');
 }
 
 /**
