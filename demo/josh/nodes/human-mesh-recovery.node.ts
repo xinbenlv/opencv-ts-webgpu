@@ -171,6 +171,15 @@ export class HumanMeshRecoveryNode
       return;
     }
 
+    // Throttle ROMP: only run inference every 10 frames (it's ~500ms per run on WASM)
+    // Reuse last result for intermediate frames
+    if (ctx.frameIndex % 10 !== 0 && ctx.frameIndex > 1) {
+      this._device!.queue.writeBuffer(verticesOut, 0, this._verticesOut);
+      this._device!.queue.writeBuffer(jointsOut, 0, this._jointsOut);
+      this._device!.queue.writeBuffer(cameraOut, 0, new Float32Array([1.0, 0.0, 0.0]));
+      return;
+    }
+
     try {
       await this._runInference(inputBuffer, verticesOut, jointsOut, cameraOut);
     } catch (e) {

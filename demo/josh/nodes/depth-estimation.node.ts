@@ -2,8 +2,6 @@ import type { GComputeNode, NodeContext, ExecutionContext, PortDescriptor } from
 import type { NodeId } from '../../../src/core/types.ts';
 import { createNodeId, computeBufferLayout, dim } from '../../../src/core/types.ts';
 import type { Shape2D, Shape3D } from '../../../src/core/types.ts';
-import { KernelRunner } from '../../../src/backends/webgpu/kernel-runner.ts';
-import { midasPostprocessKernel } from '../kernels/depth-estimation.kernel.ts';
 import { cachedFetchModel } from '../models/cached-fetch.ts';
 
 /**
@@ -60,8 +58,6 @@ export class DepthEstimationNode
   readonly inputs = INPUT_PORTS;
   readonly outputs = OUTPUT_PORTS;
 
-  private _kernelRunner: KernelRunner | null = null;
-  private _rawDepthBuffer: GPUBuffer | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _session: any = null;
   private _device: GPUDevice | null = null;
@@ -73,13 +69,6 @@ export class DepthEstimationNode
 
   async initialize(ctx: NodeContext): Promise<void> {
     this._device = ctx.device;
-    this._kernelRunner = new KernelRunner(ctx.device);
-
-    this._rawDepthBuffer = ctx.device.createBuffer({
-      size: depthLayout.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      label: 'depth_raw',
-    });
 
     const ort = await getOrt();
 
@@ -197,28 +186,13 @@ export class DepthEstimationNode
       }
     }
 
-    // Step 5: Upload raw depth to GPU and run postprocess shader
-    this._device!.queue.writeBuffer(this._rawDepthBuffer!, 0, this._depthOutput384);
-
-    const postprocessUniforms = new ArrayBuffer(16);
-    const postView = new DataView(postprocessUniforms);
-    postView.setUint32(0, DEPTH_W, true);
-    postView.setUint32(4, DEPTH_H, true);
-    postView.setFloat32(8, 1.0, true);
-    postView.setFloat32(12, 0.0, true);
-
-    await this._kernelRunner!.dispatch(
-      ctx.commandEncoder,
-      midasPostprocessKernel,
-      [this._rawDepthBuffer!, outputBuffer],
-      [DEPTH_H, DEPTH_W],
-      postprocessUniforms,
-    );
+    // Step 5: Upload MiDAS output directly to GPU output buffer.
+    // MiDAS small outputs relative inverse depth — higher = closer.
+    // The visualization colormap in main.ts normalizes to [0,1] automatically.
+    this._device!.queue.writeBuffer(outputBuffer, 0, this._depthOutput384);
   }
 
   dispose(): void {
-    this._rawDepthBuffer?.destroy();
-    this._kernelRunner?.clearCache();
     this._session?.release();
   }
 }

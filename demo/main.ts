@@ -286,18 +286,39 @@ async function main() {
 
     // Check if joints are all zero (placeholder) → use T-pose
     let allZero = true;
+    let sumAbs = 0;
     for (let i = 0; i < Math.min(joints.length, 72); i++) {
-      if (joints[i] !== 0) { allZero = false; break; }
+      sumAbs += Math.abs(joints[i]!);
+      if (joints[i] !== 0) { allZero = false; }
     }
+    // Also treat near-zero as placeholder
+    if (sumAbs < 0.01) allZero = true;
 
     const positions: [number, number][] = [];
-    for (let j = 0; j < 24; j++) {
-      if (allZero) {
+    if (allZero) {
+      for (let j = 0; j < 24; j++) {
         positions.push([TPOSE[j]![0] * w, TPOSE[j]![1] * h]);
-      } else {
-        // Project 3D joints to 2D (simple orthographic: x,y → canvas, ignore z)
-        const x = joints[j * 3]! * w * 0.5 + w * 0.5;
-        const y = -joints[j * 3 + 1]! * h * 0.5 + h * 0.5;
+      }
+    } else {
+      // Find bounding box of joints for auto-scaling
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let j = 0; j < 24; j++) {
+        const jx = joints[j * 3]!;
+        const jy = joints[j * 3 + 1]!;
+        if (jx < minX) minX = jx;
+        if (jx > maxX) maxX = jx;
+        if (jy < minY) minY = jy;
+        if (jy > maxY) maxY = jy;
+      }
+      const rangeX = maxX - minX || 1;
+      const rangeY = maxY - minY || 1;
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      const scale = Math.min(w, h) * 0.7 / Math.max(rangeX, rangeY);
+
+      for (let j = 0; j < 24; j++) {
+        const x = (joints[j * 3]! - cx) * scale + w * 0.5;
+        const y = -(joints[j * 3 + 1]! - cy) * scale + h * 0.5;
         positions.push([x, y]);
       }
     }
@@ -401,15 +422,36 @@ async function main() {
     try {
       await pipeline.execute(frameCount);
 
-      // Visualize outputs every 6 frames (throttle GPU readback)
-      if (frameCount % 6 === 0) {
-        // Node A: depth estimation output (via edge to solver)
+      // Visualize outputs every 3 frames (throttle GPU readback)
+      if (frameCount % 3 === 0) {
+        // Node A: depth estimation output
         const depthBuf = await pipeline.readOutput(depthNodeId, 'depthMap');
-        renderDepthToCanvas(new Float32Array(depthBuf), depthCtx, FRAME_W, FRAME_H);
+        const depthArr = new Float32Array(depthBuf);
+        renderDepthToCanvas(depthArr, depthCtx, FRAME_W, FRAME_H);
+
+        // Debug depth range (first few frames only)
+        if (frameCount <= 9) {
+          let dMin = Infinity, dMax = -Infinity, dSum = 0;
+          for (let i = 0; i < depthArr.length; i++) {
+            const v = depthArr[i]!;
+            if (v < dMin) dMin = v;
+            if (v > dMax) dMax = v;
+            dSum += v;
+          }
+          console.log(`[Depth] frame=${frameCount} min=${dMin.toFixed(4)} max=${dMax.toFixed(4)} mean=${(dSum/depthArr.length).toFixed(4)}`);
+        }
 
         // Node B: HMR skeleton overlay
         const jointsBuf = await pipeline.readOutput(hmrNodeId, 'jointPositions');
-        renderSkeletonToCanvas(new Float32Array(jointsBuf), meshCtx, FRAME_W, FRAME_H);
+        const jointsArr = new Float32Array(jointsBuf);
+        renderSkeletonToCanvas(jointsArr, meshCtx, FRAME_W, FRAME_H);
+
+        // Debug joints (first few frames)
+        if (frameCount <= 9) {
+          const j0 = [jointsArr[0], jointsArr[1], jointsArr[2]];
+          const j15 = [jointsArr[45], jointsArr[46], jointsArr[47]];
+          console.log(`[Joints] frame=${frameCount} pelvis=[${j0.map(v => v?.toFixed(3))}] head=[${j15.map(v => v?.toFixed(3))}]`);
+        }
 
         // Node C: solver optimized depth output
         const solverBuf = await pipeline.readOutput(solverNodeId, 'optimizedDepth');
