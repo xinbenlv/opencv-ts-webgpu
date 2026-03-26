@@ -46,13 +46,39 @@ async function main() {
   const fpsEl = document.getElementById('fps')!;
   const frameEl = document.getElementById('frameCount')!;
   const gpuMemEl = document.getElementById('gpuMem')!;
+  const loadingOverlay = document.getElementById('loadingOverlay')!;
+  const loadingSteps = document.getElementById('loadingSteps')!;
+  void document.getElementById('loadingError')!; // reserved for future error display
+
+  // ─── Loading status tracker ───
+  const stepStates = new Map<string, { status: 'pending' | 'active' | 'done' | 'warn' | 'error'; text: string }>();
+
+  function updateLoadingUI() {
+    const icons = { pending: '\u2502', active: '\u25B6', done: '\u2714', warn: '\u26A0', error: '\u2718' };
+    const colors = { pending: '#555', active: '#60a5fa', done: '#4ade80', warn: '#fbbf24', error: '#f87171' };
+    loadingSteps.innerHTML = [...stepStates.entries()].map(([, { status, text }]) =>
+      `<div style="color:${colors[status]}">${icons[status]} ${text}</div>`
+    ).join('');
+  }
+
+  function setStep(id: string, status: 'pending' | 'active' | 'done' | 'warn' | 'error', text: string) {
+    stepStates.set(id, { status, text });
+    updateLoadingUI();
+  }
+
+  // Expose globally so nodes can report progress
+  (window as any).__joshLoadingStatus = setStep;
+
+  setStep('webgpu', 'active', 'Initializing WebGPU...');
 
   // ─── Step 1: Initialize WebGPU ───
   statusEl.textContent = 'Initializing WebGPU...';
   let device: GPUDevice;
   try {
     device = await getGpuDevice();
+    setStep('webgpu', 'done', 'WebGPU initialized');
   } catch (e) {
+    setStep('webgpu', 'error', `WebGPU not available: ${e instanceof Error ? e.message : String(e)}`);
     statusEl.textContent = `WebGPU not available: ${e instanceof Error ? e.message : String(e)}`;
     return;
   }
@@ -131,6 +157,12 @@ async function main() {
   }
 
   // ─── Step 4: Build JOSH pipeline ───
+  setStep('video', 'done', 'Video source ready');
+  setStep('pipeline', 'active', 'Compiling graph...');
+  setStep('depthModel', 'pending', 'Node A: MiDAS depth model (64 MB)');
+  setStep('hmrModel', 'pending', 'Node B: ROMP pose model (111 MB)');
+  setStep('smplModel', 'pending', 'Node B: SMPL forward pass model (17 MB)');
+  setStep('solver', 'pending', 'Node C: JOSH solver (L-BFGS + gradients)');
   statusEl.textContent = 'Compiling JOSH pipeline...';
 
   // Dynamic import to allow tree-shaking in library builds
@@ -139,13 +171,20 @@ async function main() {
   let pipelineResult;
   try {
     pipelineResult = await buildJoshPipeline(ctx);
+    setStep('pipeline', 'done', 'Pipeline compiled');
   } catch (e) {
+    setStep('pipeline', 'error', `Pipeline failed: ${e instanceof Error ? e.message : String(e)}`);
     statusEl.textContent = `Pipeline build failed: ${e instanceof Error ? e.message : String(e)}`;
     console.error(e);
     return;
   }
 
   const { pipeline, depthNodeId, hmrNodeId, solverNodeId } = pipelineResult;
+
+  // Dismiss loading overlay with fade
+  loadingOverlay.style.transition = 'opacity 0.5s';
+  loadingOverlay.style.opacity = '0';
+  setTimeout(() => { loadingOverlay.style.display = 'none'; }, 600);
 
   // ─── Step 5: Render loop ───
   const FRAME_W = 384;

@@ -94,8 +94,10 @@ export class JoshSolverNode
   async initialize(ctx: NodeContext): Promise<void> {
     this._device = ctx.device;
     this._gpuKernelRunner = new KernelRunner(ctx.device);
+    const status: ((id: string, s: string, t: string) => void) | undefined = (globalThis as any).__joshLoadingStatus;
 
     // Initialize WASM backend
+    status?.('solver', 'active', 'Node C: Initializing L-BFGS optimizer...');
     this._wasmRunner = new WasmKernelRunner();
     this._lbfgs = await this._wasmRunner.createLBFGS(PARAM_DIM, 7, 1e-5);
     this._contact = await this._wasmRunner.createContactEvaluator(0.05);
@@ -143,6 +145,7 @@ export class JoshSolverNode
       label: 'josh_prev_params',
     });
 
+    status?.('solver', 'done', 'Node C: JOSH solver ready (L-BFGS + GPU gradients)');
     console.log('[JOSHSolver] Initialized with L-BFGS optimizer and gradient kernels', {
       contactEvaluator: !!this._contact,
       sharedMemBridge: this._sharedMem?.byteLength,

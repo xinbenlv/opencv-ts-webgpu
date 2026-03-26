@@ -104,27 +104,36 @@ export class HumanMeshRecoveryNode
     ort.env.wasm.wasmPaths = './assets/ort/';
     ort.env.wasm.numThreads = 1;
 
+    const status: ((id: string, s: string, t: string) => void) | undefined = (globalThis as any).__joshLoadingStatus;
+
     try {
-      // Pre-fetch models as ArrayBuffer to avoid COEP issues with ORT's internal fetch
+      status?.('hmrModel', 'active', 'Node B: Downloading ROMP pose model (111 MB)...');
       console.log('[HMR] Downloading ROMP model (111MB)...');
       const rompBuf = await fetchModelBuffer(this._rompModelUrl);
+      status?.('hmrModel', 'active', 'Node B: Creating ROMP session...');
       console.log('[HMR] Creating ROMP session...');
       this._rompSession = await ort.InferenceSession.create(rompBuf, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
       });
+      status?.('hmrModel', 'done', 'Node B: ROMP pose model ready');
       console.log('[HMR] ROMP loaded:', this._rompSession.inputNames, '→', this._rompSession.outputNames);
 
+      status?.('smplModel', 'active', 'Node B: Downloading SMPL model (17 MB)...');
       console.log('[HMR] Downloading SMPL model (17MB)...');
       const smplBuf = await fetchModelBuffer(this._smplModelUrl);
+      status?.('smplModel', 'active', 'Node B: Creating SMPL session...');
       console.log('[HMR] Creating SMPL session...');
       this._smplSession = await ort.InferenceSession.create(smplBuf, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
       });
+      status?.('smplModel', 'done', 'Node B: SMPL forward pass model ready');
       console.log('[HMR] SMPL loaded:', this._smplSession.inputNames, '→', this._smplSession.outputNames);
     } catch (e) {
       console.warn('[HMR] Model loading failed, using simulated animation:', e);
+      status?.('hmrModel', 'warn', 'Node B: ROMP unavailable — using simulated pose');
+      status?.('smplModel', 'warn', 'Node B: SMPL unavailable — using simulated mesh');
       this._useSimulation = true;
     }
   }

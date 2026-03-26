@@ -85,16 +85,22 @@ export class DepthEstimationNode
     ort.env.wasm.wasmPaths = './assets/ort/';
     ort.env.wasm.numThreads = 1;
 
-    // Pre-fetch model as ArrayBuffer to avoid COEP blocking ORT's internal fetch
+    const status: ((id: string, s: string, t: string) => void) | undefined = (globalThis as any).__joshLoadingStatus;
+
+    status?.('depthModel', 'active', 'Node A: Downloading MiDAS depth model (64 MB)...');
     console.log('[DepthEstimation] Downloading MiDAS model (64MB)...');
     const modelBuf = await (await fetch(this._modelUrl)).arrayBuffer();
+
+    status?.('depthModel', 'active', 'Node A: Creating inference session...');
     console.log('[DepthEstimation] Creating session...');
 
+    let ep = 'wasm';
     try {
       this._session = await ort.InferenceSession.create(modelBuf, {
         executionProviders: ['webgpu'],
         graphOptimizationLevel: 'all',
       });
+      ep = 'webgpu';
       console.log('[DepthEstimation] Using WebGPU execution provider');
     } catch (e) {
       console.warn('[DepthEstimation] WebGPU EP unavailable, falling back to WASM:', e);
@@ -103,6 +109,7 @@ export class DepthEstimationNode
         graphOptimizationLevel: 'all',
       });
     }
+    status?.('depthModel', 'done', `Node A: MiDAS depth model ready (${ep.toUpperCase()})`);
     console.log('[DepthEstimation] Model loaded:', this._session.inputNames, this._session.outputNames);
   }
 

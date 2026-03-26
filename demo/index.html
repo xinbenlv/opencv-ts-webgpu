@@ -116,6 +116,22 @@
         </div>
       </div>
     </main>
+    <div id="loadingOverlay" style="
+      position:fixed; inset:0; z-index:10000;
+      background:rgba(0,0,0,0.85);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      font-family:system-ui,sans-serif; color:#e0e0e0;
+    ">
+      <div style="font-size:1.4rem; font-weight:600; margin-bottom:1.5rem;">Loading JOSH Pipeline</div>
+      <div id="loadingSteps" style="
+        font-size:0.85rem; line-height:2; font-family:monospace;
+        background:#111; border:1px solid #333; border-radius:8px;
+        padding:1rem 1.5rem; min-width:420px; max-width:90vw;
+      "></div>
+      <div id="loadingError" style="
+        margin-top:1rem; color:#ff6666; font-size:0.8rem; max-width:500px; text-align:center; display:none;
+      "></div>
+    </div>
     <div id="stats">
       <div>FPS: <span id="fps">--</span></div>
       <div>Frame: <span id="frameCount">0</span></div>
