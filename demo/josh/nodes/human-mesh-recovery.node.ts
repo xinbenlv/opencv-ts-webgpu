@@ -1,18 +1,19 @@
 import type { GComputeNode, NodeContext, ExecutionContext, PortDescriptor } from '../../../src/graph/node.ts';
 import type { NodeId, Shape2D, Shape3D } from '../../../src/core/types.ts';
 import { createNodeId, computeBufferLayout, dim } from '../../../src/core/types.ts';
-import { KernelRunner } from '../../../src/backends/webgpu/kernel-runner.ts';
 import {
   SMPL_VERTEX_COUNT,
   SMPL_JOINT_COUNT,
   SMPL_POSE_DIM,
   SMPL_SHAPE_DIM,
 } from '../models/smpl.ts';
-import { buildSyntheticSmplModel, axisAngleToRotMat, getKinematicTreeI32 } from '../models/smpl-synthetic.ts';
-import { smplJointsKernel, smplForwardKernel } from '../kernels/smpl.kernel.ts';
 
 const HMR_H = 384;
 const HMR_W = 384;
+
+/** ROMP expects 512×512 input */
+const ROMP_H = 512;
+const ROMP_W = 512;
 
 const rgbLayout = computeBufferLayout(
   [dim(HMR_H), dim(HMR_W), dim(3)] as Shape3D,
@@ -44,13 +45,22 @@ const OUTPUT_PORTS = [
   { name: 'estimatedCamera', layout: cameraLayout },
 ] as const satisfies readonly PortDescriptor[];
 
+let ortModule: typeof import('onnxruntime-web') | null = null;
+async function getOrt() {
+  if (!ortModule) ortModule = await import('onnxruntime-web');
+  return ortModule;
+}
+
 /**
- * Node B: Human Mesh Recovery with SMPL Forward Pass on GPU.
+ * Node B: Human Mesh Recovery using ROMP + nosmpl ONNX models.
  *
  * Pipeline:
- * 1. Generate plausible pose parameters (CPU — simulated HMR)
- * 2. GPU: Joint regression + forward kinematics (smplJointsKernel)
- * 3. GPU: Shape blend + Linear Blend Skinning (smplForwardKernel)
+ * 1. GPU readback → CPU: read RGB frame
+ * 2. CPU: resize 384→512, prepare ROMP input [1,512,512,3]
+ * 3. ROMP inference → center_maps + params_maps (SMPL params per pixel)
+ * 4. Post-process: find best detection, extract pose θ (72), shape β (10), camera (3)
+ * 5. nosmpl inference: SMPL params → vertices [6890,3] + joints [45,3]
+ * 6. Upload vertices + joints to GPU output buffers
  */
 export class HumanMeshRecoveryNode
   implements GComputeNode<typeof INPUT_PORTS, typeof OUTPUT_PORTS>
@@ -61,220 +71,178 @@ export class HumanMeshRecoveryNode
   readonly inputs = INPUT_PORTS;
   readonly outputs = OUTPUT_PORTS;
 
-  private _kernelRunner: KernelRunner | null = null;
   private _device: GPUDevice | null = null;
 
-  // GPU buffers for SMPL model data (persistent)
-  private _meanTemplateBuffer: GPUBuffer | null = null;
-  private _shapeBlendBuffer: GPUBuffer | null = null;
-  private _skinWeightsBuffer: GPUBuffer | null = null;
-  private _skinIndicesBuffer: GPUBuffer | null = null;
-  private _jointRegressorBuffer: GPUBuffer | null = null;
-  private _parentIndicesBuffer: GPUBuffer | null = null;
+  // ONNX sessions
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _rompSession: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _smplSession: any = null;
 
-  // GPU buffers for per-frame data
-  private _shapedVerticesBuffer: GPUBuffer | null = null;
-  private _localRotationsBuffer: GPUBuffer | null = null;
-  private _shapeParamsBuffer: GPUBuffer | null = null;
-  private _jointTransformsBuffer: GPUBuffer | null = null;
-  private _jointPositionsBuffer: GPUBuffer | null = null;
+  // Reusable CPU arrays
+  private _rompInput = new Float32Array(1 * ROMP_H * ROMP_W * 3);
+  private _verticesOut = new Float32Array(SMPL_VERTEX_COUNT * 3);
+  private _jointsOut = new Float32Array(SMPL_JOINT_COUNT * 3);
 
-  // CPU-side pose state
-  private _poseParams = new Float32Array(SMPL_POSE_DIM);
-  private _shapeParams = new Float32Array(SMPL_SHAPE_DIM);
+  constructor(
+    private readonly _rompModelUrl = './assets/models/romp.onnx',
+    private readonly _smplModelUrl = './assets/models/smpl_sim.onnx',
+  ) {}
 
   async initialize(ctx: NodeContext): Promise<void> {
     this._device = ctx.device;
-    this._kernelRunner = new KernelRunner(ctx.device);
 
-    const smpl = buildSyntheticSmplModel();
+    const ort = await getOrt();
+    ort.env.wasm.wasmPaths = './assets/ort/';
+    ort.env.wasm.numThreads = 1;
 
-    this._meanTemplateBuffer = this._createStorageBuffer(ctx.device, smpl.meanTemplate, 'smpl_mean_template');
-    this._shapeBlendBuffer = this._createStorageBuffer(ctx.device, smpl.shapeBlendShapes, 'smpl_shape_blends');
-    this._skinWeightsBuffer = this._createStorageBuffer(ctx.device, smpl.skinningWeights, 'smpl_skin_weights');
-    this._skinIndicesBuffer = this._createStorageBuffer(ctx.device, smpl.skinningIndices, 'smpl_skin_indices');
-    this._jointRegressorBuffer = this._createStorageBuffer(ctx.device, smpl.jointRegressor, 'smpl_joint_regressor');
-    this._parentIndicesBuffer = this._createStorageBuffer(ctx.device, getKinematicTreeI32(), 'smpl_parent_indices');
+    // Load ROMP model
+    console.log('[HMR] Loading ROMP model...');
+    try {
+      this._rompSession = await ort.InferenceSession.create(this._rompModelUrl, {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all',
+      });
+      console.log('[HMR] ROMP loaded:', this._rompSession.inputNames, '→', this._rompSession.outputNames);
+    } catch (e) {
+      console.error('[HMR] Failed to load ROMP:', e);
+    }
 
-    this._shapedVerticesBuffer = ctx.device.createBuffer({
-      size: SMPL_VERTEX_COUNT * 3 * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      label: 'smpl_shaped_vertices',
-    });
-
-    this._localRotationsBuffer = ctx.device.createBuffer({
-      size: SMPL_JOINT_COUNT * 9 * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      label: 'smpl_local_rotations',
-    });
-
-    this._shapeParamsBuffer = ctx.device.createBuffer({
-      size: SMPL_SHAPE_DIM * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      label: 'smpl_shape_params',
-    });
-
-    this._jointTransformsBuffer = ctx.device.createBuffer({
-      size: SMPL_JOINT_COUNT * 16 * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      label: 'smpl_joint_transforms',
-    });
-
-    this._jointPositionsBuffer = ctx.device.createBuffer({
-      size: SMPL_JOINT_COUNT * 3 * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      label: 'smpl_joint_positions',
-    });
-
-    console.log('[HMR] Initialized with synthetic SMPL model');
+    // Load SMPL forward pass model
+    console.log('[HMR] Loading SMPL model...');
+    try {
+      this._smplSession = await ort.InferenceSession.create(this._smplModelUrl, {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all',
+      });
+      console.log('[HMR] SMPL loaded:', this._smplSession.inputNames, '→', this._smplSession.outputNames);
+    } catch (e) {
+      console.error('[HMR] Failed to load SMPL:', e);
+    }
   }
 
   async execute(ctx: ExecutionContext): Promise<void> {
-    ctx.getInput('rgbFrame');
+    const inputBuffer = ctx.getInput('rgbFrame') as GPUBuffer;
     const verticesOut = ctx.getOutput('smplVertices') as GPUBuffer;
     const jointsOut = ctx.getOutput('jointPositions') as GPUBuffer;
     const cameraOut = ctx.getOutput('estimatedCamera') as GPUBuffer;
 
-    // Step 1: Generate pose parameters (simulated HMR)
-    this._updatePoseFromFrame(ctx.frameIndex);
-
-    // Step 2: Convert axis-angle to rotation matrices and upload
-    const localRotations = new Float32Array(SMPL_JOINT_COUNT * 9);
-    for (let j = 0; j < SMPL_JOINT_COUNT; j++) {
-      const rotMat = axisAngleToRotMat(
-        this._poseParams[j * 3]!,
-        this._poseParams[j * 3 + 1]!,
-        this._poseParams[j * 3 + 2]!,
-      );
-      localRotations.set(rotMat, j * 9);
+    if (!this._rompSession || !this._smplSession) {
+      ctx.commandEncoder.clearBuffer(verticesOut, 0, verticesLayout.byteLength);
+      ctx.commandEncoder.clearBuffer(jointsOut, 0, jointsLayout.byteLength);
+      ctx.commandEncoder.clearBuffer(cameraOut, 0, cameraLayout.byteLength);
+      return;
     }
 
-    this._device!.queue.writeBuffer(this._localRotationsBuffer!, 0, localRotations);
-    this._device!.queue.writeBuffer(this._shapeParamsBuffer!, 0, this._shapeParams);
-
-    // Copy mean template to shaped vertices for joint regression
-    ctx.commandEncoder.copyBufferToBuffer(
-      this._meanTemplateBuffer!, 0,
-      this._shapedVerticesBuffer!, 0,
-      SMPL_VERTEX_COUNT * 3 * 4,
-    );
-
-    // Step 3: GPU — Joint regression + forward kinematics
-    const jointsUniforms = new ArrayBuffer(16);
-    const jv = new DataView(jointsUniforms);
-    jv.setUint32(0, SMPL_VERTEX_COUNT, true);
-    jv.setUint32(4, SMPL_JOINT_COUNT, true);
-    jv.setUint32(8, 0, true);
-    jv.setUint32(12, 0, true);
-
-    await this._kernelRunner!.dispatch(
-      ctx.commandEncoder,
-      smplJointsKernel,
-      [
-        this._shapedVerticesBuffer!,
-        this._jointRegressorBuffer!,
-        this._localRotationsBuffer!,
-        this._parentIndicesBuffer!,
-        this._jointTransformsBuffer!,
-        this._jointPositionsBuffer!,
-      ],
-      [SMPL_VERTEX_COUNT],
-      jointsUniforms,
-    );
-
-    // Step 4: GPU — Shape blend + LBS
-    const forwardUniforms = new ArrayBuffer(16);
-    const fv = new DataView(forwardUniforms);
-    fv.setUint32(0, SMPL_VERTEX_COUNT, true);
-    fv.setUint32(4, SMPL_JOINT_COUNT, true);
-    fv.setUint32(8, SMPL_SHAPE_DIM, true);
-    fv.setUint32(12, 0, true);
-
-    await this._kernelRunner!.dispatch(
-      ctx.commandEncoder,
-      smplForwardKernel,
-      [
-        this._meanTemplateBuffer!,
-        this._shapeBlendBuffer!,
-        this._skinWeightsBuffer!,
-        this._skinIndicesBuffer!,
-        this._jointTransformsBuffer!,
-        this._shapeParamsBuffer!,
-        verticesOut,
-      ],
-      [SMPL_VERTEX_COUNT],
-      forwardUniforms,
-    );
-
-    // Copy joint positions to output
-    ctx.commandEncoder.copyBufferToBuffer(
-      this._jointPositionsBuffer!, 0,
-      jointsOut, 0,
-      SMPL_JOINT_COUNT * 3 * 4,
-    );
-
-    // Camera params (weak-perspective: [scale, tx, ty])
-    const camData = new Float32Array([1.0, 0.0, 0.0]);
-    this._device!.queue.writeBuffer(cameraOut, 0, camData);
-  }
-
-  /**
-   * Simulate plausible human motion — walking + breathing cycle.
-   * In production, replace with ONNX HMR inference.
-   */
-  private _updatePoseFromFrame(frameIndex: number): void {
-    const t = frameIndex * 0.05;
-    this._poseParams.fill(0);
-
-    const walkPhase = Math.sin(t);
-    const walkAmp = 0.3;
-
-    // Hip flexion (walking)
-    this._poseParams[1 * 3]  =  walkPhase * walkAmp;
-    this._poseParams[2 * 3]  = -walkPhase * walkAmp;
-
-    // Knee flexion
-    this._poseParams[4 * 3]  = Math.max(0, -walkPhase) * walkAmp * 0.8;
-    this._poseParams[5 * 3]  = Math.max(0,  walkPhase) * walkAmp * 0.8;
-
-    // Arm swing (opposite to legs)
-    this._poseParams[16 * 3] = -walkPhase * walkAmp * 0.4;
-    this._poseParams[17 * 3] =  walkPhase * walkAmp * 0.4;
-
-    // Elbow bend
-    this._poseParams[18 * 3 + 2] = -0.3;
-    this._poseParams[19 * 3 + 2] =  0.3;
-
-    // Spine twist
-    this._poseParams[3 * 3 + 1] = walkPhase * 0.05;
-    this._poseParams[6 * 3 + 1] = walkPhase * 0.03;
-
-    // Breathing
-    this._shapeParams[0] = Math.sin(t * 0.3) * 0.02;
-  }
-
-  private _createStorageBuffer(device: GPUDevice, data: Float32Array | Int32Array | Uint32Array, label: string): GPUBuffer {
-    const buffer = device.createBuffer({
-      size: data.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      label,
+    // Step 1: GPU readback
+    const readbackEncoder = this._device!.createCommandEncoder({ label: 'hmr_readback' });
+    const staging = this._device!.createBuffer({
+      size: rgbLayout.byteLength,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      label: 'hmr_staging',
     });
-    device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
-    return buffer;
+    readbackEncoder.copyBufferToBuffer(inputBuffer, 0, staging, 0, rgbLayout.byteLength);
+    this._device!.queue.submit([readbackEncoder.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const rgbData = new Float32Array(staging.getMappedRange().slice(0));
+    staging.unmap();
+    staging.destroy();
+
+    // Step 2: Resize 384→512 for ROMP, keep NHWC format [1,512,512,3]
+    for (let y = 0; y < ROMP_H; y++) {
+      for (let x = 0; x < ROMP_W; x++) {
+        const srcX = (x / ROMP_W) * HMR_W;
+        const srcY = (y / ROMP_H) * HMR_H;
+        const x0 = Math.min(Math.floor(srcX), HMR_W - 1);
+        const y0 = Math.min(Math.floor(srcY), HMR_H - 1);
+        const srcIdx = (y0 * HMR_W + x0) * 3;
+        const dstIdx = (y * ROMP_W + x) * 3;
+        // ROMP expects [0,1] float RGB in NHWC
+        this._rompInput[dstIdx] = rgbData[srcIdx]!;
+        this._rompInput[dstIdx + 1] = rgbData[srcIdx + 1]!;
+        this._rompInput[dstIdx + 2] = rgbData[srcIdx + 2]!;
+      }
+    }
+
+    // Step 3: ROMP inference
+    const ort = await getOrt();
+    const rompTensor = new ort.Tensor('float32', this._rompInput, [1, ROMP_H, ROMP_W, 3]);
+    const rompFeeds: Record<string, InstanceType<typeof ort.Tensor>> = {};
+    rompFeeds[this._rompSession.inputNames[0]!] = rompTensor;
+
+    const rompResults = await this._rompSession.run(rompFeeds);
+    const centerMaps = rompResults[this._rompSession.outputNames[0]!]!.data as Float32Array;
+    const paramsMaps = rompResults[this._rompSession.outputNames[1]!]!.data as Float32Array;
+
+    // Step 4: Post-process — find pixel with highest center response
+    const mapSize = 64;
+    let bestIdx = 0;
+    let bestVal = -Infinity;
+    for (let i = 0; i < mapSize * mapSize; i++) {
+      if (centerMaps[i]! > bestVal) {
+        bestVal = centerMaps[i]!;
+        bestIdx = i;
+      }
+    }
+
+    // Extract SMPL params at best detection location
+    // params_maps layout: [1, 145, 64, 64] — 145 channels at each spatial location
+    // Channel layout: [0-2] camera, [3-74] pose (72), [75-84] shape (10), [85-144] extra
+    const camera = new Float32Array(3);
+    const poseAxisAngle = new Float32Array(SMPL_POSE_DIM); // 72
+    const shape = new Float32Array(SMPL_SHAPE_DIM); // 10
+
+    for (let c = 0; c < 3; c++) {
+      camera[c] = paramsMaps[c * mapSize * mapSize + bestIdx]!;
+    }
+    for (let c = 0; c < SMPL_POSE_DIM; c++) {
+      poseAxisAngle[c] = paramsMaps[(c + 3) * mapSize * mapSize + bestIdx]!;
+    }
+    for (let c = 0; c < SMPL_SHAPE_DIM; c++) {
+      shape[c] = paramsMaps[(c + 75) * mapSize * mapSize + bestIdx]!;
+    }
+
+    // Step 5: SMPL forward pass — convert axis-angle to rotation format
+    // nosmpl expects global_orient [1,1,3] and body [1,23,3]
+    const globalOrient = new Float32Array(3);
+    globalOrient[0] = poseAxisAngle[0]!;
+    globalOrient[1] = poseAxisAngle[1]!;
+    globalOrient[2] = poseAxisAngle[2]!;
+
+    const bodyPose = new Float32Array(23 * 3);
+    for (let i = 0; i < 23 * 3; i++) {
+      bodyPose[i] = poseAxisAngle[i + 3]!;
+    }
+
+    const orientTensor = new ort.Tensor('float32', globalOrient, [1, 1, 3]);
+    const bodyTensor = new ort.Tensor('float32', bodyPose, [1, 23, 3]);
+    const smplFeeds: Record<string, InstanceType<typeof ort.Tensor>> = {};
+    smplFeeds[this._smplSession.inputNames[0]!] = orientTensor;
+    smplFeeds[this._smplSession.inputNames[1]!] = bodyTensor;
+
+    const smplResults = await this._smplSession.run(smplFeeds);
+    const vertices = smplResults['vertices']!.data as Float32Array;
+    const joints = smplResults['joints']!.data as Float32Array;
+
+    // Step 6: Copy to output arrays (truncate joints from 45 to 24 for SMPL)
+    const numVerts = Math.min(vertices.length, this._verticesOut.length);
+    this._verticesOut.set(vertices.subarray(0, numVerts));
+
+    // Copy first 24 joints (SMPL joints from 45 total)
+    for (let j = 0; j < SMPL_JOINT_COUNT; j++) {
+      this._jointsOut[j * 3] = joints[j * 3]!;
+      this._jointsOut[j * 3 + 1] = joints[j * 3 + 1]!;
+      this._jointsOut[j * 3 + 2] = joints[j * 3 + 2]!;
+    }
+
+    // Upload to GPU
+    this._device!.queue.writeBuffer(verticesOut, 0, this._verticesOut);
+    this._device!.queue.writeBuffer(jointsOut, 0, this._jointsOut);
+    this._device!.queue.writeBuffer(cameraOut, 0, camera);
   }
 
   dispose(): void {
-    this._meanTemplateBuffer?.destroy();
-    this._shapeBlendBuffer?.destroy();
-    this._skinWeightsBuffer?.destroy();
-    this._skinIndicesBuffer?.destroy();
-    this._jointRegressorBuffer?.destroy();
-    this._parentIndicesBuffer?.destroy();
-    this._shapedVerticesBuffer?.destroy();
-    this._localRotationsBuffer?.destroy();
-    this._shapeParamsBuffer?.destroy();
-    this._jointTransformsBuffer?.destroy();
-    this._jointPositionsBuffer?.destroy();
-    this._kernelRunner?.clearCache();
+    this._rompSession?.release();
+    this._smplSession?.release();
   }
 }
