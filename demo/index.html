@@ -15,11 +15,12 @@
         min-height: 100vh;
       }
       header {
-        padding: 1rem 2rem;
+        padding: 0.75rem 2rem;
         border-bottom: 1px solid #222;
         display: flex;
         align-items: center;
         gap: 1rem;
+        flex-wrap: wrap;
       }
       header h1 { font-size: 1.2rem; font-weight: 600; }
       header .tag {
@@ -29,7 +30,39 @@
         background: #1a3a1a;
         color: #4ade80;
       }
-      main {
+      /* ── Mode tabs ──────────────────────────────────────────────── */
+      .mode-tabs {
+        display: flex;
+        gap: 0;
+        padding: 0 2rem;
+        background: #0d0d0d;
+        border-bottom: 1px solid #222;
+      }
+      .mode-tab {
+        padding: 0.55rem 1.4rem;
+        font-size: 0.82rem;
+        font-weight: 500;
+        color: #555;
+        cursor: pointer;
+        border: none;
+        background: none;
+        border-bottom: 2px solid transparent;
+        transition: color 0.15s, border-color 0.15s;
+        letter-spacing: 0.02em;
+      }
+      .mode-tab:hover { color: #a0b0c0; }
+      .mode-tab.active { color: #7ab8e0; border-bottom-color: #4a9fc2; }
+      /* ── Tab content panes ──────────────────────────────────────── */
+      .tab-pane { display: none; flex: 1; overflow: hidden; }
+      .tab-pane.active { display: flex; flex-direction: column; }
+      /* ── Realtime 2×2 grid (existing) ───────────────────────────── */
+      #pane-realtime {
+        flex: 1;
+        display: none;
+        flex-direction: column;
+      }
+      #pane-realtime.active { display: flex; }
+      #realtime-grid {
         flex: 1;
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -63,6 +96,16 @@
         max-height: 100%;
         object-fit: contain;
       }
+      /* ── Offline pane ───────────────────────────────────────────── */
+      #pane-offline {
+        flex: 1;
+        overflow: hidden;
+      }
+      #offline-ui-root {
+        height: 100%;
+        overflow-y: auto;
+      }
+      /* ── Stats overlay ─────────────────────────────────────────── */
       #stats {
         position: fixed;
         bottom: 1rem;
@@ -73,7 +116,9 @@
         padding: 0.5rem 1rem;
         border-radius: 6px;
         border: 1px solid #333;
+        z-index: 500;
       }
+      #stats.hidden { display: none; }
       .status { color: #666; font-style: italic; }
     </style>
   </head>
@@ -83,39 +128,54 @@
       <span class="tag">JOSH 4D Reconstruction</span>
       <span class="tag">WebGPU</span>
     </header>
-    <main>
-      <div class="panel">
-        <div class="panel-header" style="display:flex;align-items:center;gap:0.5rem;">
-          Input —
-          <select id="inputSource" style="background:#222;color:#ccc;border:1px solid #444;border-radius:4px;padding:0.15rem 0.3rem;font-size:0.8rem;">
-            <option value="camera">Camera</option>
-            <option value="sample">JOSH Demo Video</option>
-          </select>
+
+    <!-- Mode selection tabs -->
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-tab="realtime">Realtime</button>
+      <button class="mode-tab" data-tab="offline">Offline</button>
+    </div>
+
+    <!-- Realtime pane (existing 2×2 grid) -->
+    <div id="pane-realtime" class="tab-pane active">
+      <div id="realtime-grid">
+        <div class="panel">
+          <div class="panel-header" style="display:flex;align-items:center;gap:0.5rem;">
+            Input —
+            <select id="inputSource" style="background:#222;color:#ccc;border:1px solid #444;border-radius:4px;padding:0.15rem 0.3rem;font-size:0.8rem;">
+              <option value="camera">Camera</option>
+              <option value="sample">JOSH Demo Video</option>
+            </select>
+          </div>
+          <div class="panel-body">
+            <video id="videoInput" autoplay muted playsinline></video>
+            <span class="status" id="cameraStatus">Requesting camera...</span>
+          </div>
         </div>
-        <div class="panel-body">
-          <video id="videoInput" autoplay muted playsinline></video>
-          <span class="status" id="cameraStatus">Requesting camera...</span>
+        <div class="panel">
+          <div class="panel-header">Node A — Depth Estimation</div>
+          <div class="panel-body">
+            <canvas id="depthCanvas"></canvas>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">Node B — Human Mesh Recovery (SMPL)</div>
+          <div class="panel-body">
+            <canvas id="meshCanvas"></canvas>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">Node C — JOSH Solver Output</div>
+          <div class="panel-body">
+            <canvas id="outputCanvas"></canvas>
+          </div>
         </div>
       </div>
-      <div class="panel">
-        <div class="panel-header">Node A — Depth Estimation</div>
-        <div class="panel-body">
-          <canvas id="depthCanvas"></canvas>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-header">Node B — Human Mesh Recovery (SMPL)</div>
-        <div class="panel-body">
-          <canvas id="meshCanvas"></canvas>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-header">Node C — JOSH Solver Output</div>
-        <div class="panel-body">
-          <canvas id="outputCanvas"></canvas>
-        </div>
-      </div>
-    </main>
+    </div>
+
+    <!-- Offline pane -->
+    <div id="pane-offline" class="tab-pane">
+      <div id="offline-ui-root"></div>
+    </div>
     <div id="loadingOverlay" style="
       position:fixed; inset:0; z-index:10000;
       background:rgba(0,0,0,0.85);
@@ -165,6 +225,43 @@
         "></div>
       </div>
     </div>
+    <script type="module">
+      // ── Tab switcher ─────────────────────────────────────────────────────
+      let offlineMounted = false;
+
+      async function mountOffline() {
+        if (offlineMounted) return;
+        offlineMounted = true;
+        const root = document.getElementById('offline-ui-root');
+        if (!root) return;
+        // Lazy-import the offline entry point
+        const { mountOfflineUI } = await import('./main-offline.ts');
+        mountOfflineUI(root);
+      }
+
+      function switchTab(tabName) {
+        const tabs = document.querySelectorAll('.mode-tab');
+        const panes = document.querySelectorAll('.tab-pane');
+        tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
+        panes.forEach(p => {
+          const isTarget = p.id === `pane-${tabName}`;
+          p.classList.toggle('active', isTarget);
+        });
+        // Stats widget only relevant in realtime mode
+        const stats = document.getElementById('stats');
+        if (stats) stats.classList.toggle('hidden', tabName !== 'realtime');
+        // Lazy-mount offline UI on first switch
+        if (tabName === 'offline') mountOffline();
+      }
+
+      document.querySelectorAll('.mode-tab').forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+      });
+
+      // Honour ?tab=offline in URL
+      const urlTab = new URLSearchParams(location.search).get('tab');
+      if (urlTab === 'offline') switchTab('offline');
+    </script>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

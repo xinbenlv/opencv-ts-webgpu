@@ -265,17 +265,16 @@ export class ProgressUI {
     this._statsChunkEl = document.createElement('span');
     this._statsIterEl  = document.createElement('span');
     this._statsLossEl  = document.createElement('span');
-    statsBar.innerHTML = 'Frame ';
-    statsBar.appendChild(this._statsFrameEl);
-    statsBar.innerHTML += '';
-    statsBar.append(document.createTextNode('Frame '));
-    statsBar.appendChild(this._statsFrameEl);
-    statsBar.append(document.createTextNode(' | Chunk '));
-    statsBar.appendChild(this._statsChunkEl);
-    statsBar.append(document.createTextNode(' | Iteration '));
-    statsBar.appendChild(this._statsIterEl);
-    statsBar.append(document.createTextNode(' | Loss: '));
-    statsBar.appendChild(this._statsLossEl);
+    statsBar.append(
+      document.createTextNode('Frame '),
+      this._statsFrameEl,
+      document.createTextNode(' | Chunk '),
+      this._statsChunkEl,
+      document.createTextNode(' | Iteration '),
+      this._statsIterEl,
+      document.createTextNode(' | Loss: '),
+      this._statsLossEl,
+    );
 
     // ETA
     const etaRow = document.createElement('div');
