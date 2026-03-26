@@ -11,3 +11,4 @@ src/backends/wasm/pkg/
 *.log
 demo/assets/ort/
 demo/public/
+.claude/worktrees/
