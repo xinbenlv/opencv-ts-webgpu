@@ -81,14 +81,21 @@ export class DepthEstimationNode
     });
 
     const ort = await getOrt();
+
+    // Point ORT to the correct WASM file location.
+    // In dev mode, Vite serves demo/public/ at the root.
+    // In production, the bundler inlines the WASM as an asset.
+    ort.env.wasm.wasmPaths = '/';
+    ort.env.wasm.numThreads = 1; // Avoid SharedArrayBuffer conflicts with main thread
+
     try {
       this._session = await ort.InferenceSession.create(this._modelUrl, {
         executionProviders: ['webgpu'],
         graphOptimizationLevel: 'all',
       });
       console.log('[DepthEstimation] Using WebGPU execution provider');
-    } catch {
-      console.warn('[DepthEstimation] WebGPU EP unavailable, falling back to WASM');
+    } catch (e) {
+      console.warn('[DepthEstimation] WebGPU EP unavailable, falling back to WASM:', e);
       this._session = await ort.InferenceSession.create(this._modelUrl, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',

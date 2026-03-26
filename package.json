@@ -8,6 +8,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
+    "postinstall": "mkdir -p demo/public && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm demo/public/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm demo/public/",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
