@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phase 3 — SMPL Mesh &amp; Point Cloud Renderer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d14;
+      color: #e0e6f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 12px 20px;
+      background: #161622;
+      border-bottom: 1px solid #2a2a40;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; color: #7a9fc2; }
+    header span { font-size: 0.75rem; color: #5a6a80; }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 8px 16px 0;
+      background: #161622;
+      border-bottom: 1px solid #2a2a40;
+    }
+    .tab {
+      padding: 8px 18px;
+      border: none;
+      background: none;
+      color: #7a8aa0;
+      cursor: pointer;
+      border-radius: 6px 6px 0 0;
+      font-size: 0.85rem;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tab:hover { background: #1e1e30; color: #c0d0e0; }
+    .tab.active { background: #1a1a2e; color: #7a9fc2; border-bottom: 2px solid #7a9fc2; }
+
+    .panels { flex: 1; display: flex; overflow: hidden; }
+    .panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel.active { display: flex; }
+
+    .canvas-wrap {
+      flex: 1;
+      position: relative;
+      background: #0a0a14;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: grab;
+    }
+    canvas:active { cursor: grabbing; }
+
+    .hud {
+      position: absolute;
+      top: 10px;
+      left: 12px;
+      background: rgba(10,10,20,0.7);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      color: #8090a8;
+      pointer-events: none;
+      line-height: 1.6;
+    }
+    .hud b { color: #a0b4c8; }
+
+    .tip {
+      position: absolute;
+      bottom: 10px;
+      right: 12px;
+      font-size: 0.68rem;
+      color: #404858;
+      pointer-events: none;
+    }
+
+    #no-webgpu {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      gap: 12px;
+      color: #e05060;
+      font-size: 1rem;
+    }
+    #no-webgpu span { font-size: 0.8rem; color: #607080; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>JOSH Phase 3 — Rendering</h1>
+  <span>WebGPU • SMPL Mesh &amp; Point Cloud</span>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="tab-mesh">SMPL Mesh</button>
+  <button class="tab"        data-tab="tab-pc"  >Point Cloud</button>
+  <button class="tab"        data-tab="tab-both">Combined</button>
+</nav>
+
+<div id="no-webgpu">
+  WebGPU not supported — use Chrome 113+ or Edge 113+
+  <span>Enable at <code>chrome://flags/#enable-unsafe-webgpu</code> if needed</span>
+</div>
+
+<!-- Tab 1: SMPL Mesh -->
+<div class="panel active" id="tab-mesh">
+  <div class="canvas-wrap">
+    <canvas id="canvas-mesh"></canvas>
+    <div class="hud" id="hud-mesh">
+      <b>Vertices:</b> – &nbsp; <b>Faces:</b> – &nbsp; <b>FPS:</b> –
+    </div>
+    <div class="tip">Drag to orbit</div>
+  </div>
+</div>
+
+<!-- Tab 2: Point Cloud -->
+<div class="panel" id="tab-pc">
+  <div class="canvas-wrap">
+    <canvas id="canvas-pc"></canvas>
+    <div class="hud" id="hud-pc">
+      <b>Points:</b> – &nbsp; <b>FPS:</b> –
+    </div>
+    <div class="tip">Drag to orbit</div>
+  </div>
+</div>
+
+<!-- Tab 3: Combined -->
+<div class="panel" id="tab-both">
+  <div class="canvas-wrap">
+    <canvas id="canvas-both"></canvas>
+    <div class="hud" id="hud-both">
+      <b>Blue mesh</b> = SMPL body &nbsp;|&nbsp; <b>Coloured points</b> = scene reconstruction &nbsp; <b>FPS:</b> –
+    </div>
+    <div class="tip">Drag to orbit</div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// WGSL shaders (inline)
+// ============================================================
+
+const SMPL_VERT_WGSL = /* wgsl */`
+struct Uniforms {
+  mvp:       mat4x4<f32>,
+  model:     mat4x4<f32>,
+  light_dir: vec3<f32>,
+  _pad:      f32,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexInput {
+  @location(0) position: vec3<f32>,
+  @location(1) normal:   vec3<f32>,
+}
+struct VertexOutput {
+  @builtin(position) clip_pos:     vec4<f32>,
+  @location(0)       world_normal: vec3<f32>,
+  @location(1)       world_pos:    vec3<f32>,
+}
+@vertex
+fn main(in: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let world        = uniforms.model * vec4<f32>(in.position, 1.0);
+  out.clip_pos     = uniforms.mvp   * vec4<f32>(in.position, 1.0);
+  out.world_pos    = world.xyz;
+  let n            = uniforms.model * vec4<f32>(in.normal, 0.0);
+  out.world_normal = normalize(n.xyz);
+  return out;
+}
+`;
+
+const SMPL_FRAG_WGSL = /* wgsl */`
+struct Uniforms {
+  mvp:       mat4x4<f32>,
+  model:     mat4x4<f32>,
+  light_dir: vec3<f32>,
+  _pad:      f32,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct FragInput {
+  @location(0) world_normal: vec3<f32>,
+  @location(1) world_pos:    vec3<f32>,
+}
+const BODY_COLOR = vec3<f32>(0.478, 0.624, 0.761);
+const EYE = vec3<f32>(0.0, 1.0, 3.0);
+
+@fragment
+fn main(in: FragInput) -> @location(0) vec4<f32> {
+  let N = normalize(in.world_normal);
+  let L = normalize(uniforms.light_dir);
+  let V = normalize(EYE - in.world_pos);
+  let R = reflect(-L, N);
+  let ambient  = 0.2;
+  let diffuse  = 0.7 * max(0.0, dot(N, L));
+  let specular = 0.1 * pow(max(0.0, dot(R, V)), 32.0);
+  let colour   = (ambient + diffuse) * BODY_COLOR + vec3<f32>(specular);
+  return vec4<f32>(colour, 1.0);
+}
+`;
+
+const PC_VERT_WGSL = /* wgsl */`
+struct Uniforms {
+  mvp:        mat4x4<f32>,
+  point_size: f32,
+  _p0: f32, _p1: f32, _p2: f32,
+}
+@group(0) @binding(0) var<uniform>  uniforms:  Uniforms;
+@group(0) @binding(1) var<storage, read> positions: array<f32>;
+@group(0) @binding(2) var<storage, read> colors:    array<f32>;
+
+struct VertexOutput {
+  @builtin(position) clip_pos:  vec4<f32>,
+  @location(0)       color:     vec3<f32>,
+  @location(1)       local_uv:  vec2<f32>,
+}
+const QUAD_CORNERS = array<vec2<f32>, 6>(
+  vec2<f32>(-1.0,  1.0),
+  vec2<f32>( 1.0,  1.0),
+  vec2<f32>(-1.0, -1.0),
+  vec2<f32>( 1.0,  1.0),
+  vec2<f32>( 1.0, -1.0),
+  vec2<f32>(-1.0, -1.0),
+);
+@vertex
+fn main(@builtin(vertex_index) vid: u32) -> VertexOutput {
+  let point_idx  = vid / 6u;
+  let corner_idx = vid % 6u;
+  let px = positions[point_idx * 3u + 0u];
+  let py = positions[point_idx * 3u + 1u];
+  let pz = positions[point_idx * 3u + 2u];
+  let clip_center = uniforms.mvp * vec4<f32>(px, py, pz, 1.0);
+  let corner      = QUAD_CORNERS[corner_idx];
+  let half_ndc    = uniforms.point_size / 1000.0 * clip_center.w;
+  var out: VertexOutput;
+  out.clip_pos = clip_center + vec4<f32>(corner * half_ndc, 0.0, 0.0);
+  out.color    = vec3<f32>(colors[point_idx*3u+0u], colors[point_idx*3u+1u], colors[point_idx*3u+2u]);
+  out.local_uv = corner;
+  return out;
+}
+`;
+
+const PC_FRAG_WGSL = /* wgsl */`
+struct FragInput {
+  @location(0) color:    vec3<f32>,
+  @location(1) local_uv: vec2<f32>,
+}
+@fragment
+fn main(in: FragInput) -> @location(0) vec4<f32> {
+  let d = dot(in.local_uv, in.local_uv);
+  if (d > 1.0) { discard; }
+  let alpha = 1.0 - smoothstep(0.7, 1.0, d);
+  return vec4<f32>(in.color, alpha);
+}
+`;
+
+// ============================================================
+// Math helpers
+// ============================================================
+function mat4Identity() {
+  return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+}
+
+function mat4Perspective(fovY, aspect, near, far) {
+  const f = 1.0 / Math.tan(fovY / 2);
+  const r = 1.0 / (near - far);
+  return new Float32Array([
+    f/aspect, 0, 0,              0,
+    0,        f, 0,              0,
+    0,        0, far*r,         -1,
+    0,        0, far*near*r,     0,
+  ]);
+}
+
+function mat4LookAt(eye, target, up) {
+  let [ex,ey,ez] = eye, [tx,ty,tz] = target, [ux,uy,uz] = up;
+  let fx=ex-tx, fy=ey-ty, fz=ez-tz;
+  let l = Math.sqrt(fx*fx+fy*fy+fz*fz);
+  fx/=l; fy/=l; fz/=l;
+  let rx=uy*fz-uz*fy, ry=uz*fx-ux*fz, rz=ux*fy-uy*fx;
+  l = Math.sqrt(rx*rx+ry*ry+rz*rz);
+  rx/=l; ry/=l; rz/=l;
+  const ux2=fy*rz-fz*ry, uy2=fz*rx-fx*rz, uz2=fx*ry-fy*rx;
+  return new Float32Array([
+    rx,                   ux2,                   fx,                   0,
+    ry,                   uy2,                   fy,                   0,
+    rz,                   uz2,                   fz,                   0,
+    -(rx*ex+ry*ey+rz*ez), -(ux2*ex+uy2*ey+uz2*ez), -(fx*ex+fy*ey+fz*ez), 1,
+  ]);
+}
+
+function mat4Mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c=0;c<4;c++) for (let r=0;r<4;r++) {
+    let s=0; for (let k=0;k<4;k++) s+=a[k*4+r]*b[c*4+k]; o[c*4+r]=s;
+  }
+  return o;
+}
+
+// ============================================================
+// Procedural box-figure mesh builder
+// ============================================================
+function buildBoxFigure() {
+  // Each box: [cx, cy, cz, sx, sy, sz]
+  const boxes = [
+    [0,    1.0,  0,    0.40, 0.60, 0.20],  // torso
+    [0,    1.65, 0,    0.20, 0.25, 0.20],  // head
+    [0.35, 1.0,  0,    0.15, 0.55, 0.15],  // left arm
+    [-0.35,1.0,  0,    0.15, 0.55, 0.15],  // right arm
+    [0.15, 0.35, 0,    0.15, 0.70, 0.15],  // left leg
+    [-0.15,0.35, 0,    0.15, 0.70, 0.15],  // right leg
+  ];
+
+  const allVerts = [];
+  const allFaces = [];
+  let base = 0;
+
+  for (const [cx, cy, cz, sx, sy, sz] of boxes) {
+    const hx=sx/2, hy=sy/2, hz=sz/2;
+    // 8 corners of a box
+    const v = [
+      [cx-hx, cy-hy, cz-hz],
+      [cx+hx, cy-hy, cz-hz],
+      [cx+hx, cy+hy, cz-hz],
+      [cx-hx, cy+hy, cz-hz],
+      [cx-hx, cy-hy, cz+hz],
+      [cx+hx, cy-hy, cz+hz],
+      [cx+hx, cy+hy, cz+hz],
+      [cx-hx, cy+hy, cz+hz],
+    ];
+    for (const vert of v) allVerts.push(...vert);
+
+    // 6 faces × 2 triangles, wound CCW from outside
+    const faces = [
+      [0,2,1],[0,3,2], // back   (-z)
+      [4,5,6],[4,6,7], // front  (+z)
+      [0,1,5],[0,5,4], // bottom (-y)
+      [2,3,7],[2,7,6], // top    (+y)
+      [0,4,7],[0,7,3], // left   (-x)
+      [1,2,6],[1,6,5], // right  (+x)
+    ];
+    for (const [a,b,c] of faces) allFaces.push(base+a, base+b, base+c);
+    base += 8;
+  }
+
+  const vertices = new Float32Array(allVerts);
+  const faces    = new Uint32Array(allFaces);
+
+  // Compute smooth normals (CPU-side)
+  const N = allVerts.length / 3;
+  const normals = new Float32Array(N * 3);
+  for (let i=0; i<faces.length; i+=3) {
+    const i0=faces[i], i1=faces[i+1], i2=faces[i+2];
+    const ax=vertices[i0*3]-vertices[i2*3], ay=vertices[i0*3+1]-vertices[i2*3+1], az=vertices[i0*3+2]-vertices[i2*3+2];
+    const bx=vertices[i1*3]-vertices[i2*3], by=vertices[i1*3+1]-vertices[i2*3+1], bz=vertices[i1*3+2]-vertices[i2*3+2];
+    const nx=ay*bz-az*by, ny=az*bx-ax*bz, nz=ax*by-ay*bx;
+    for (const idx of [i0,i1,i2]) {
+      normals[idx*3]+=nx; normals[idx*3+1]+=ny; normals[idx*3+2]+=nz;
+    }
+  }
+  for (let i=0; i<N; i++) {
+    const x=normals[i*3], y=normals[i*3+1], z=normals[i*3+2];
+    const l=Math.sqrt(x*x+y*y+z*z)||1;
+    normals[i*3]/=l; normals[i*3+1]/=l; normals[i*3+2]/=l;
+  }
+
+  return { vertices, normals, faces };
+}
+
+// ============================================================
+// Synthetic point cloud: sphere with RGB from position
+// ============================================================
+function buildPointCloud(N = 1000) {
+  const positions = new Float32Array(N * 3);
+  const colors    = new Float32Array(N * 3);
+  for (let i=0; i<N; i++) {
+    // Fibonacci sphere
+    const y  = 1 - (i / (N-1)) * 2;
+    const r  = Math.sqrt(1 - y*y);
+    const phi = Math.PI * (Math.sqrt(5) - 1) * i;
+    const x  = r * Math.cos(phi);
+    const z  = r * Math.sin(phi);
+    const scale = 1.0 + 0.4 * (i / N); // vary radius slightly
+    positions[i*3]   = x * scale;
+    positions[i*3+1] = y * scale + 1.0; // centre at y=1
+    positions[i*3+2] = z * scale;
+    // Map position to RGB
+    colors[i*3]   = x * 0.5 + 0.5;
+    colors[i*3+1] = y * 0.5 + 0.5;
+    colors[i*3+2] = z * 0.5 + 0.5;
+  }
+  return { positions, colors, count: N };
+}
+
+// ============================================================
+// SmplRenderer (inline)
+// ============================================================
+class SmplRenderer {
+  constructor(device, canvas, bgClear = {r:0.08,g:0.08,b:0.12,a:1}) {
+    this.device  = device;
+    this.canvas  = canvas;
+    this.bgClear = bgClear;
+
+    const ctx = canvas.getContext('webgpu');
+    if (!ctx) throw new Error('no webgpu ctx');
+    this.ctx    = ctx;
+    this.format = navigator.gpu.getPreferredCanvasFormat();
+    ctx.configure({ device, format: this.format, alphaMode: 'premultiplied' });
+
+    this.uniformBuf = device.createBuffer({
+      size: (16+16+4)*4, usage: GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST
+    });
+
+    this._buildPipeline();
+    this.depthTex = null;
+    this.vBuf = this.nBuf = this.iBuf = null;
+    this.indexCount = 0;
+    this.bindGroup = null;
+  }
+
+  setMesh(vertices, normals, faces) {
+    this.vBuf?.destroy(); this.nBuf?.destroy(); this.iBuf?.destroy();
+    this.vBuf = this._upload(vertices, GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST);
+    this.nBuf = this._upload(normals,  GPUBufferUsage.VERTEX);
+    this.iBuf = this._uploadU32(faces, GPUBufferUsage.INDEX);
+    this.indexCount = faces.length;
+    this._rebuildBG();
+  }
+
+  updateVertices(v) { this.device.queue.writeBuffer(this.vBuf, 0, v); }
+
+  render(camera) {
+    if (!this.pipeline||!this.bindGroup||!this.vBuf) return;
+    this._ensureDepth();
+    this._writeUniforms(camera);
+    const enc  = this.device.createCommandEncoder();
+    const view = this.ctx.getCurrentTexture().createView();
+    const pass = enc.beginRenderPass({
+      colorAttachments:[{ view, clearValue:this.bgClear, loadOp:'clear', storeOp:'store' }],
+      depthStencilAttachment:{ view:this.depthTex.createView(), depthClearValue:1, depthLoadOp:'clear', depthStoreOp:'store' },
+    });
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.bindGroup);
+    pass.setVertexBuffer(0, this.vBuf);
+    pass.setVertexBuffer(1, this.nBuf);
+    pass.setIndexBuffer(this.iBuf, 'uint32');
+    pass.drawIndexed(this.indexCount);
+    pass.end();
+    this.device.queue.submit([enc.finish()]);
+  }
+
+  renderInto(pass) {
+    if (!this.pipeline||!this.bindGroup||!this.vBuf) return;
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.bindGroup);
+    pass.setVertexBuffer(0, this.vBuf);
+    pass.setVertexBuffer(1, this.nBuf);
+    pass.setIndexBuffer(this.iBuf, 'uint32');
+    pass.drawIndexed(this.indexCount);
+  }
+
+  _buildPipeline() {
+    const { device, format } = this;
+    const bgl = device.createBindGroupLayout({ entries:[{
+      binding:0, visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT, buffer:{ type:'uniform' }
+    }]});
+    this.pipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({bindGroupLayouts:[bgl]}),
+      vertex: {
+        module: device.createShaderModule({code:SMPL_VERT_WGSL}), entryPoint:'main',
+        buffers:[
+          { arrayStride:12, attributes:[{shaderLocation:0,offset:0,format:'float32x3'}] },
+          { arrayStride:12, attributes:[{shaderLocation:1,offset:0,format:'float32x3'}] },
+        ],
+      },
+      fragment: {
+        module: device.createShaderModule({code:SMPL_FRAG_WGSL}), entryPoint:'main',
+        targets:[{format}],
+      },
+      primitive: { topology:'triangle-list', cullMode:'back' },
+      depthStencil: { format:'depth24plus', depthWriteEnabled:true, depthCompare:'less' },
+    });
+  }
+
+  _rebuildBG() {
+    if (!this.pipeline) return;
+    this.bindGroup = this.device.createBindGroup({
+      layout: this.pipeline.getBindGroupLayout(0),
+      entries:[{ binding:0, resource:{ buffer:this.uniformBuf } }],
+    });
+  }
+
+  _ensureDepth() {
+    const w=this.canvas.width, h=this.canvas.height;
+    if (this.depthTex && this.depthTex.width===w && this.depthTex.height===h) return;
+    this.depthTex?.destroy();
+    this.depthTex = this.device.createTexture({ size:[w,h], format:'depth24plus', usage:GPUTextureUsage.RENDER_ATTACHMENT });
+  }
+
+  _writeUniforms(camera) {
+    const aspect = this.canvas.width/this.canvas.height;
+    const proj   = mat4Perspective(camera.fovY, aspect, camera.near, camera.far);
+    const view   = mat4LookAt(camera.eye, camera.target, camera.up);
+    const model  = mat4Identity();
+    const mvp    = mat4Mul(proj, mat4Mul(view, model));
+    const L      = normalize3([0.6,1.0,0.8]);
+    const data   = new Float32Array(16+16+4);
+    data.set(mvp,0); data.set(model,16); data.set(L,32);
+    this.device.queue.writeBuffer(this.uniformBuf, 0, data);
+  }
+
+  _upload(data, usage) {
+    const b = this.device.createBuffer({ size:data.byteLength, usage:usage|GPUBufferUsage.COPY_DST, mappedAtCreation:true });
+    new Float32Array(b.getMappedRange()).set(data); b.unmap(); return b;
+  }
+  _uploadU32(data, usage) {
+    const b = this.device.createBuffer({ size:data.byteLength, usage:usage|GPUBufferUsage.COPY_DST, mappedAtCreation:true });
+    new Uint32Array(b.getMappedRange()).set(data); b.unmap(); return b;
+  }
+}
+
+// ============================================================
+// PointCloudRenderer (inline)
+// ============================================================
+class PointCloudRenderer {
+  constructor(device, canvas, bgClear = {r:0.08,g:0.08,b:0.12,a:1}) {
+    this.device   = device;
+    this.canvas   = canvas;
+    this.bgClear  = bgClear;
+    this.pointSize = 4.0;
+
+    const ctx = canvas.getContext('webgpu');
+    if (!ctx) throw new Error('no webgpu ctx');
+    this.ctx    = ctx;
+    this.format = navigator.gpu.getPreferredCanvasFormat();
+    ctx.configure({ device, format:this.format, alphaMode:'premultiplied' });
+
+    this.uniformBuf = device.createBuffer({
+      size: 20*4, usage: GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST
+    });
+
+    this._buildPipeline();
+    this.depthTex  = null;
+    this.posBuf    = null;
+    this.colBuf    = null;
+    this.pointCount = 0;
+    this.bindGroup  = null;
+  }
+
+  setPoints(positions, colors) {
+    this.posBuf?.destroy(); this.colBuf?.destroy();
+    this.pointCount = positions.length / 3;
+    this.posBuf = this._upload(positions, GPUBufferUsage.STORAGE);
+    this.colBuf = this._upload(colors,    GPUBufferUsage.STORAGE);
+    this._rebuildBG();
+  }
+
+  render(camera) {
+    if (!this.pipeline||!this.bindGroup||!this.pointCount) return;
+    this._ensureDepth();
+    this._writeUniforms(camera);
+    const enc  = this.device.createCommandEncoder();
+    const view = this.ctx.getCurrentTexture().createView();
+    const pass = enc.beginRenderPass({
+      colorAttachments:[{ view, clearValue:this.bgClear, loadOp:'clear', storeOp:'store' }],
+      depthStencilAttachment:{ view:this.depthTex.createView(), depthClearValue:1, depthLoadOp:'clear', depthStoreOp:'store' },
+    });
+    this._drawInto(pass);
+    pass.end();
+    this.device.queue.submit([enc.finish()]);
+  }
+
+  _drawInto(pass) {
+    if (!this.pipeline||!this.bindGroup||!this.pointCount) return;
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.bindGroup);
+    pass.draw(this.pointCount * 6);
+  }
+
+  _buildPipeline() {
+    const { device, format } = this;
+    const bgl = device.createBindGroupLayout({ entries:[
+      { binding:0, visibility:GPUShaderStage.VERTEX, buffer:{ type:'uniform'           } },
+      { binding:1, visibility:GPUShaderStage.VERTEX, buffer:{ type:'read-only-storage'  } },
+      { binding:2, visibility:GPUShaderStage.VERTEX, buffer:{ type:'read-only-storage'  } },
+    ]});
+    this.pipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({bindGroupLayouts:[bgl]}),
+      vertex: {
+        module: device.createShaderModule({code:PC_VERT_WGSL}), entryPoint:'main',
+      },
+      fragment: {
+        module: device.createShaderModule({code:PC_FRAG_WGSL}), entryPoint:'main',
+        targets:[{ format, blend:{
+          color:{ srcFactor:'src-alpha', dstFactor:'one-minus-src-alpha', operation:'add' },
+          alpha:{ srcFactor:'one',       dstFactor:'one-minus-src-alpha', operation:'add' },
+        }}],
+      },
+      primitive: { topology:'triangle-list' },
+      depthStencil: { format:'depth24plus', depthWriteEnabled:true, depthCompare:'less' },
+    });
+  }
+
+  _rebuildBG() {
+    if (!this.pipeline||!this.posBuf||!this.colBuf) return;
+    this.bindGroup = this.device.createBindGroup({
+      layout: this.pipeline.getBindGroupLayout(0),
+      entries:[
+        { binding:0, resource:{ buffer:this.uniformBuf } },
+        { binding:1, resource:{ buffer:this.posBuf     } },
+        { binding:2, resource:{ buffer:this.colBuf     } },
+      ],
+    });
+  }
+
+  _ensureDepth() {
+    const w=this.canvas.width, h=this.canvas.height;
+    if (this.depthTex && this.depthTex.width===w && this.depthTex.height===h) return;
+    this.depthTex?.destroy();
+    this.depthTex = this.device.createTexture({ size:[w,h], format:'depth24plus', usage:GPUTextureUsage.RENDER_ATTACHMENT });
+  }
+
+  _writeUniforms(camera) {
+    const aspect = this.canvas.width/this.canvas.height;
+    const proj   = mat4Perspective(camera.fovY, aspect, camera.near, camera.far);
+    const view   = mat4LookAt(camera.eye, camera.target, camera.up);
+    const mvp    = mat4Mul(proj, view);
+    const data   = new Float32Array(20);
+    data.set(mvp, 0); data[16] = this.pointSize;
+    this.device.queue.writeBuffer(this.uniformBuf, 0, data);
+  }
+
+  _upload(data, usage) {
+    const b = this.device.createBuffer({ size:data.byteLength, usage:usage|GPUBufferUsage.COPY_DST, mappedAtCreation:true });
+    new Float32Array(b.getMappedRange()).set(data); b.unmap(); return b;
+  }
+}
+
+// ============================================================
+// Combined renderer (Tab 3)
+// Uses the same canvas + shared depth texture
+// ============================================================
+class CombinedRenderer {
+  constructor(device, canvas) {
+    this.device  = device;
+    this.canvas  = canvas;
+    this.format  = navigator.gpu.getPreferredCanvasFormat();
+
+    const ctx = canvas.getContext('webgpu');
+    if (!ctx) throw new Error('no webgpu ctx');
+    this.ctx = ctx;
+    ctx.configure({ device, format:this.format, alphaMode:'premultiplied' });
+
+    this.depthTex = null;
+
+    // Create sub-renderers without their own canvas contexts:
+    // We'll call their internal draw methods manually.
+    this._buildSmplPipeline();
+    this._buildPcPipeline();
+
+    // Shared uniform buffers
+    this.smplUniformBuf = device.createBuffer({ size:(16+16+4)*4, usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST });
+    this.pcUniformBuf   = device.createBuffer({ size:20*4,        usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST });
+
+    this.smplVBuf = this.smplNBuf = this.smplIBuf = null;
+    this.smplIndexCount = 0;
+    this.smplBG = null;
+
+    this.pcPosBuf = this.pcColBuf = null;
+    this.pcCount  = 0;
+    this.pcBG     = null;
+
+    this.pointSize = 4.0;
+  }
+
+  setMesh(vertices, normals, faces) {
+    this.smplVBuf?.destroy(); this.smplNBuf?.destroy(); this.smplIBuf?.destroy();
+    this.smplVBuf = this._uploadF32(vertices, GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST);
+    this.smplNBuf = this._uploadF32(normals,  GPUBufferUsage.VERTEX);
+    this.smplIBuf = this._uploadU32(faces,    GPUBufferUsage.INDEX);
+    this.smplIndexCount = faces.length;
+    this._rebuildSmplBG();
+  }
+
+  setPoints(positions, colors) {
+    this.pcPosBuf?.destroy(); this.pcColBuf?.destroy();
+    this.pcPosBuf = this._uploadF32(positions, GPUBufferUsage.STORAGE);
+    this.pcColBuf = this._uploadF32(colors,    GPUBufferUsage.STORAGE);
+    this.pcCount  = positions.length / 3;
+    this._rebuildPcBG();
+  }
+
+  render(camera) {
+    this._ensureDepth();
+    const aspect = this.canvas.width / this.canvas.height;
+    const proj   = mat4Perspective(camera.fovY, aspect, camera.near, camera.far);
+    const view   = mat4LookAt(camera.eye, camera.target, camera.up);
+    const model  = mat4Identity();
+    const mvp    = mat4Mul(proj, mat4Mul(view, model));
+    const L      = normalize3([0.6,1.0,0.8]);
+
+    // SMPL uniforms
+    const su = new Float32Array(16+16+4);
+    su.set(mvp,0); su.set(model,16); su.set(L,32);
+    this.device.queue.writeBuffer(this.smplUniformBuf, 0, su);
+
+    // PC uniforms
+    const pu = new Float32Array(20);
+    pu.set(mat4Mul(proj, view), 0); pu[16] = this.pointSize;
+    this.device.queue.writeBuffer(this.pcUniformBuf, 0, pu);
+
+    const enc  = this.device.createCommandEncoder();
+    const view2 = this.ctx.getCurrentTexture().createView();
+    const pass  = enc.beginRenderPass({
+      colorAttachments:[{ view:view2, clearValue:{r:0.08,g:0.08,b:0.12,a:1}, loadOp:'clear', storeOp:'store' }],
+      depthStencilAttachment:{ view:this.depthTex.createView(), depthClearValue:1, depthLoadOp:'clear', depthStoreOp:'store' },
+    });
+
+    // Draw mesh
+    if (this.smplPipeline && this.smplBG && this.smplVBuf) {
+      pass.setPipeline(this.smplPipeline);
+      pass.setBindGroup(0, this.smplBG);
+      pass.setVertexBuffer(0, this.smplVBuf);
+      pass.setVertexBuffer(1, this.smplNBuf);
+      pass.setIndexBuffer(this.smplIBuf, 'uint32');
+      pass.drawIndexed(this.smplIndexCount);
+    }
+
+    // Draw point cloud on top
+    if (this.pcPipeline && this.pcBG && this.pcCount) {
+      pass.setPipeline(this.pcPipeline);
+      pass.setBindGroup(0, this.pcBG);
+      pass.draw(this.pcCount * 6);
+    }
+
+    pass.end();
+    this.device.queue.submit([enc.finish()]);
+  }
+
+  _buildSmplPipeline() {
+    const { device } = this;
+    const fmt = this.format;
+    const bgl = device.createBindGroupLayout({ entries:[{
+      binding:0, visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT, buffer:{ type:'uniform' }
+    }]});
+    this.smplPipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({bindGroupLayouts:[bgl]}),
+      vertex: {
+        module: device.createShaderModule({code:SMPL_VERT_WGSL}), entryPoint:'main',
+        buffers:[
+          { arrayStride:12, attributes:[{shaderLocation:0,offset:0,format:'float32x3'}] },
+          { arrayStride:12, attributes:[{shaderLocation:1,offset:0,format:'float32x3'}] },
+        ],
+      },
+      fragment: { module: device.createShaderModule({code:SMPL_FRAG_WGSL}), entryPoint:'main', targets:[{format:fmt}] },
+      primitive: { topology:'triangle-list', cullMode:'back' },
+      depthStencil: { format:'depth24plus', depthWriteEnabled:true, depthCompare:'less' },
+    });
+  }
+
+  _buildPcPipeline() {
+    const { device } = this;
+    const fmt = this.format;
+    const bgl = device.createBindGroupLayout({ entries:[
+      { binding:0, visibility:GPUShaderStage.VERTEX, buffer:{ type:'uniform'          } },
+      { binding:1, visibility:GPUShaderStage.VERTEX, buffer:{ type:'read-only-storage' } },
+      { binding:2, visibility:GPUShaderStage.VERTEX, buffer:{ type:'read-only-storage' } },
+    ]});
+    this.pcPipeline = device.createRenderPipeline({
+      layout: device.createPipelineLayout({bindGroupLayouts:[bgl]}),
+      vertex: { module: device.createShaderModule({code:PC_VERT_WGSL}), entryPoint:'main' },
+      fragment: { module: device.createShaderModule({code:PC_FRAG_WGSL}), entryPoint:'main',
+        targets:[{ format:fmt, blend:{
+          color:{ srcFactor:'src-alpha', dstFactor:'one-minus-src-alpha', operation:'add' },
+          alpha:{ srcFactor:'one',       dstFactor:'one-minus-src-alpha', operation:'add' },
+        }}],
+      },
+      primitive: { topology:'triangle-list' },
+      depthStencil: { format:'depth24plus', depthWriteEnabled:true, depthCompare:'less' },
+    });
+  }
+
+  _rebuildSmplBG() {
+    if (!this.smplPipeline) return;
+    this.smplBG = this.device.createBindGroup({
+      layout: this.smplPipeline.getBindGroupLayout(0),
+      entries:[{ binding:0, resource:{ buffer:this.smplUniformBuf } }],
+    });
+  }
+
+  _rebuildPcBG() {
+    if (!this.pcPipeline||!this.pcPosBuf||!this.pcColBuf) return;
+    this.pcBG = this.device.createBindGroup({
+      layout: this.pcPipeline.getBindGroupLayout(0),
+      entries:[
+        { binding:0, resource:{ buffer:this.pcUniformBuf } },
+        { binding:1, resource:{ buffer:this.pcPosBuf    } },
+        { binding:2, resource:{ buffer:this.pcColBuf    } },
+      ],
+    });
+  }
+
+  _ensureDepth() {
+    const w=this.canvas.width, h=this.canvas.height;
+    if (this.depthTex && this.depthTex.width===w && this.depthTex.height===h) return;
+    this.depthTex?.destroy();
+    this.depthTex = this.device.createTexture({ size:[w,h], format:'depth24plus', usage:GPUTextureUsage.RENDER_ATTACHMENT });
+  }
+
+  _uploadF32(data, usage) {
+    const b = this.device.createBuffer({ size:data.byteLength, usage:usage|GPUBufferUsage.COPY_DST, mappedAtCreation:true });
+    new Float32Array(b.getMappedRange()).set(data); b.unmap(); return b;
+  }
+  _uploadU32(data, usage) {
+    const b = this.device.createBuffer({ size:data.byteLength, usage:usage|GPUBufferUsage.COPY_DST, mappedAtCreation:true });
+    new Uint32Array(b.getMappedRange()).set(data); b.unmap(); return b;
+  }
+}
+
+// ============================================================
+// Utility
+// ============================================================
+function normalize3(v) {
+  const l = Math.sqrt(v[0]**2+v[1]**2+v[2]**2)||1;
+  return new Float32Array([v[0]/l, v[1]/l, v[2]/l]);
+}
+
+function makeCamera(rotX, rotY) {
+  const d   = 3.0;
+  const eye = [
+    Math.sin(rotY)*Math.cos(rotX)*d,
+    Math.sin(rotX)*d + 1.0,
+    Math.cos(rotY)*Math.cos(rotX)*d,
+  ];
+  return {
+    eye,
+    target: [0, 1, 0],
+    up: [0, 1, 0],
+    fovY: Math.PI / 4,
+    near: 0.1,
+    far: 100.0,
+  };
+}
+
+function fitCanvas(canvas) {
+  const w = canvas.parentElement.clientWidth  || 800;
+  const h = canvas.parentElement.clientHeight || 600;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width  = w;
+    canvas.height = h;
+  }
+}
+
+function addOrbitControls(canvas, onChange) {
+  let rotX = 0.25, rotY = 0.4;
+  canvas.addEventListener('mousemove', e => {
+    if (e.buttons) {
+      rotX += e.movementY * 0.01;
+      rotY += e.movementX * 0.01;
+      rotX = Math.max(-Math.PI/2+0.05, Math.min(Math.PI/2-0.05, rotX));
+      onChange(rotX, rotY);
+    }
+  });
+  // touch support
+  let lastTx=0, lastTy=0;
+  canvas.addEventListener('touchstart', e => { lastTx=e.touches[0].clientX; lastTy=e.touches[0].clientY; });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const dx = e.touches[0].clientX - lastTx;
+    const dy = e.touches[0].clientY - lastTy;
+    lastTx=e.touches[0].clientX; lastTy=e.touches[0].clientY;
+    rotX += dy * 0.01; rotY += dx * 0.01;
+    rotX = Math.max(-Math.PI/2+0.05, Math.min(Math.PI/2-0.05, rotX));
+    onChange(rotX, rotY);
+  }, { passive: false });
+  return () => ({ rotX, rotY });
+}
+
+// ============================================================
+// FPS counter
+// ============================================================
+function makeFpsCounter() {
+  let frames = 0, last = performance.now(), fps = 0;
+  return {
+    tick() { frames++; const now=performance.now(); if (now-last>=500){ fps=Math.round(frames*1000/(now-last)); frames=0; last=now; } },
+    get() { return fps; }
+  };
+}
+
+// ============================================================
+// Main
+// ============================================================
+async function main() {
+  // WebGPU check
+  if (!navigator.gpu) {
+    document.getElementById('no-webgpu').style.display = 'flex';
+    document.querySelectorAll('.panel').forEach(p => p.style.display='none');
+    return;
+  }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    document.getElementById('no-webgpu').style.display = 'flex';
+    document.querySelectorAll('.panel').forEach(p => p.style.display='none');
+    return;
+  }
+  const device = await adapter.requestDevice();
+  device.addEventListener('uncapturederror', e => console.error('WebGPU:', e.error.message));
+
+  // Build data
+  const mesh = buildBoxFigure();
+  const pc   = buildPointCloud(1000);
+
+  // ---- Tab 1: Mesh ----
+  const canvasMesh = document.getElementById('canvas-mesh');
+  const hudMesh    = document.getElementById('hud-mesh');
+  fitCanvas(canvasMesh);
+  const meshRenderer = new SmplRenderer(device, canvasMesh);
+  meshRenderer.setMesh(mesh.vertices, mesh.normals, mesh.faces);
+  hudMesh.innerHTML = `<b>Vertices:</b> ${mesh.vertices.length/3} &nbsp; <b>Faces:</b> ${mesh.faces.length/3} &nbsp; <b>FPS:</b> <span id="fps-mesh">–</span>`;
+  let meshRotX=0.25, meshRotY=0.4;
+  addOrbitControls(canvasMesh, (rx,ry)=>{ meshRotX=rx; meshRotY=ry; });
+  const meshFps = makeFpsCounter();
+  let meshAnim;
+  function loopMesh() {
+    meshAnim = requestAnimationFrame(loopMesh);
+    fitCanvas(canvasMesh);
+    meshRenderer.render(makeCamera(meshRotX, meshRotY));
+    meshFps.tick();
+    const el = document.getElementById('fps-mesh');
+    if (el) el.textContent = meshFps.get();
+  }
+
+  // ---- Tab 2: Point Cloud ----
+  const canvasPc = document.getElementById('canvas-pc');
+  const hudPc    = document.getElementById('hud-pc');
+  fitCanvas(canvasPc);
+  const pcRenderer = new PointCloudRenderer(device, canvasPc);
+  pcRenderer.setPoints(pc.positions, pc.colors);
+  hudPc.innerHTML = `<b>Points:</b> ${pc.count} &nbsp; <b>FPS:</b> <span id="fps-pc">–</span>`;
+  let pcRotX=0.25, pcRotY=0.4;
+  addOrbitControls(canvasPc, (rx,ry)=>{ pcRotX=rx; pcRotY=ry; });
+  const pcFps = makeFpsCounter();
+  let pcAnim;
+  function loopPc() {
+    pcAnim = requestAnimationFrame(loopPc);
+    fitCanvas(canvasPc);
+    pcRenderer.render(makeCamera(pcRotX, pcRotY));
+    pcFps.tick();
+    const el = document.getElementById('fps-pc');
+    if (el) el.textContent = pcFps.get();
+  }
+
+  // ---- Tab 3: Combined ----
+  const canvasBoth = document.getElementById('canvas-both');
+  fitCanvas(canvasBoth);
+  const combinedRenderer = new CombinedRenderer(device, canvasBoth);
+  combinedRenderer.setMesh(mesh.vertices, mesh.normals, mesh.faces);
+  combinedRenderer.setPoints(pc.positions, pc.colors);
+  let bothRotX=0.25, bothRotY=0.4;
+  addOrbitControls(canvasBoth, (rx,ry)=>{ bothRotX=rx; bothRotY=ry; });
+  const bothFps = makeFpsCounter();
+  let bothAnim;
+  function loopBoth() {
+    bothAnim = requestAnimationFrame(loopBoth);
+    fitCanvas(canvasBoth);
+    combinedRenderer.render(makeCamera(bothRotX, bothRotY));
+    bothFps.tick();
+    const el = document.getElementById('fps-both');
+    if (el) el.textContent = bothFps.get();
+  }
+  document.getElementById('hud-both').innerHTML =
+    `<b>Blue mesh</b> = SMPL body &nbsp;|&nbsp; <b>Coloured points</b> = scene reconstruction &nbsp; <b>FPS:</b> <span id="fps-both">–</span>`;
+
+  // ---- Tab switching ----
+  const tabs   = document.querySelectorAll('.tab');
+  const panels = document.querySelectorAll('.panel');
+  let activeLoop = null;
+
+  function startLoop(tabId) {
+    if (activeLoop) cancelAnimationFrame(activeLoop);
+    if      (tabId === 'tab-mesh') { loopMesh(); activeLoop = meshAnim; }
+    else if (tabId === 'tab-pc')   { loopPc();   activeLoop = pcAnim;   }
+    else if (tabId === 'tab-both') { loopBoth(); activeLoop = bothAnim; }
+  }
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      panels.forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      const id = tab.dataset.tab;
+      document.getElementById(id).classList.add('active');
+      startLoop(id);
+    });
+  });
+
+  // Start the default tab loop
+  startLoop('tab-mesh');
+}
+
+main().catch(err => {
+  console.error('Phase 3 init error:', err);
+  document.getElementById('no-webgpu').style.display = 'flex';
+  document.getElementById('no-webgpu').querySelector('span').textContent = String(err);
+});
+</script>
+</body>
+</html>
