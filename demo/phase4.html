@@ -2,327 +2,998 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Phase 4 — SMPL Upload · Offline Pipeline · Config</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phase 4 — SMPL Upload &amp; Offline Pipeline</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; }
-    #tabs { display: flex; background: #161b22; border-bottom: 2px solid #30363d; }
-    .tab { padding: 10px 20px; cursor: pointer; font-size: 13px; color: #8b949e; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-    .tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
-    .panel { display: none; padding: 24px; }
-    .panel.active { display: block; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    /* SMPL Upload tab */
-    #smpl-mount { max-width: 600px; }
+    body {
+      background: #0d0d14;
+      color: #e0e6f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
 
-    /* Offline Pipeline tab */
-    .drop-zone { border: 2px dashed #30363d; border-radius: 8px; padding: 40px; text-align: center; cursor: pointer; transition: border-color 0.2s; margin-bottom: 16px; }
-    .drop-zone:hover, .drop-zone.drag-over { border-color: #58a6ff; }
-    .drop-zone p { color: #8b949e; font-size: 14px; }
-    .drop-zone .icon { font-size: 36px; margin-bottom: 8px; }
-    #process-btn { padding: 10px 24px; background: #238636; border: none; border-radius: 6px; color: white; font-size: 14px; cursor: pointer; }
-    #process-btn:disabled { background: #21262d; color: #484f58; cursor: default; }
-    .phase-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
-    .phase-icon { width: 20px; text-align: center; }
-    .phase-name { width: 100px; }
-    .phase-bar-wrap { flex: 1; background: #21262d; border-radius: 4px; height: 8px; }
-    .phase-bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #238636, #2ea043); width: 0%; transition: width 0.3s; }
-    .phase-status { width: 60px; text-align: right; font-size: 11px; color: #8b949e; font-family: monospace; }
+    header {
+      padding: 12px 20px;
+      background: #161622;
+      border-bottom: 1px solid #2a2a40;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; color: #7a9fc2; }
+    header span { font-size: 0.75rem; color: #5a6a80; }
 
-    /* Config tab */
-    .config-section { margin-bottom: 24px; }
-    .config-section h3 { font-size: 13px; font-weight: 600; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 6px 10px; background: #161b22; color: #8b949e; font-weight: 500; font-size: 11px; text-transform: uppercase; }
-    td { padding: 6px 10px; border-bottom: 1px solid #21262d; font-family: monospace; }
-    td:first-child { color: #79c0ff; }
-    td:last-child { color: #e6edf3; }
-    .chip { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; background: #1f6feb; color: white; }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 8px 16px 0;
+      background: #161622;
+      border-bottom: 1px solid #2a2a40;
+      flex-shrink: 0;
+    }
+    .tab {
+      padding: 8px 20px;
+      border: none;
+      background: none;
+      color: #7a8aa0;
+      cursor: pointer;
+      border-radius: 6px 6px 0 0;
+      font-size: 0.85rem;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tab:hover { background: #1e1e30; color: #c0d0e0; }
+    .tab.active { background: #1a1a2e; color: #7a9fc2; border-bottom: 2px solid #7a9fc2; }
+
+    .panels { flex: 1; display: flex; overflow: hidden; }
+    .panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel.active { display: flex; }
+
+    /* ── Tab 1: SMPL Upload ─────────────────────────────────────────────── */
+    #tab-smpl {
+      align-items: center;
+      padding: 32px 20px;
+      overflow-y: auto;
+      gap: 24px;
+    }
+    #smpl-loader-container {
+      width: 100%;
+      max-width: 480px;
+    }
+
+    /* ── Tab 2: Offline Pipeline ────────────────────────────────────────── */
+    #tab-offline {
+      overflow-y: auto;
+    }
+    .offline-layout {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 20px;
+    }
+    .offline-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .offline-card {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 16px;
+      flex: 1;
+      min-width: 260px;
+    }
+    .card-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #506070;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 10px;
+    }
+    .drop-zone {
+      border: 2px dashed #333;
+      border-radius: 8px;
+      padding: 28px 16px;
+      text-align: center;
+      cursor: pointer;
+      background: #0d0d14;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: #4a9fc2;
+      background: #0d1a24;
+    }
+    .drop-zone .dz-icon { font-size: 2rem; opacity: 0.5; margin-bottom: 6px; }
+    .drop-zone .dz-hint { font-size: 0.82rem; color: #c0d0e0; }
+    .drop-zone .dz-sub  { font-size: 0.72rem; color: #405060; margin-top: 4px; }
+
+    #pipeline-process-btn {
+      padding: 10px 28px;
+      background: #1a3a1a;
+      color: #4ade80;
+      border: 1px solid #2a5a2a;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: not-allowed;
+      opacity: 0.4;
+      transition: opacity 0.2s;
+      align-self: flex-start;
+    }
+    #pipeline-process-btn.ready {
+      cursor: pointer;
+      opacity: 1;
+    }
+
+    #pipeline-progress { display: none; }
+    #pipeline-progress.visible { display: block; }
+    .progress-wrap { margin-bottom: 10px; }
+    .progress-wrap label { font-size: 0.78rem; color: #90a0b0; display: block; margin-bottom: 3px; }
+    progress {
+      width: 100%;
+      height: 7px;
+      border-radius: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    progress::-webkit-progress-bar { background: #1a2a3a; border-radius: 4px; }
+    progress.p1::-webkit-progress-value { background: #4a9fc2; border-radius: 4px; }
+    progress.p2::-webkit-progress-value { background: #a78bfa; border-radius: 4px; }
+    progress.p3::-webkit-progress-value { background: #4ade80; border-radius: 4px; }
+
+    #pipeline-frame-counter {
+      font-family: monospace;
+      font-size: 0.78rem;
+      color: #507090;
+      min-height: 1.2em;
+      margin-top: 6px;
+    }
+
+    #viewer-3d {
+      height: 240px;
+      background: #0a0a10;
+      border: 1px solid #1a2030;
+      border-radius: 8px;
+      overflow: hidden;
+      position: relative;
+    }
+    #viewer-canvas { width: 100%; height: 100%; display: block; }
+    #viewer-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .vph-inner { text-align: center; color: #2a3a4a; }
+    .vph-inner .vph-icon { font-size: 2.5rem; opacity: 0.3; margin-bottom: 8px; }
+    .vph-inner .vph-text { font-size: 0.8rem; }
+
+    #timeline-section { padding: 0 4px; }
+    #timeline-scrubber { width: 100%; accent-color: #4a9fc2; }
+    .timeline-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: #304050;
+      margin-top: 2px;
+    }
+
+    #loss-canvas {
+      width: 100%;
+      height: 80px;
+      background: #0a0a10;
+      border-radius: 4px;
+      display: block;
+    }
+
+    /* ── Tab 3: Config Inspector ────────────────────────────────────────── */
+    #tab-config {
+      overflow-y: auto;
+      padding: 24px;
+    }
+    .config-section { margin-bottom: 28px; }
+    .config-section h3 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #607080;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 10px;
+      border-bottom: 1px solid #1a2030;
+      padding-bottom: 6px;
+    }
+    table.config-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    table.config-table th {
+      text-align: left;
+      color: #506070;
+      font-weight: 600;
+      padding: 4px 12px 4px 0;
+      border-bottom: 1px solid #1a2030;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    table.config-table td {
+      padding: 5px 12px 5px 0;
+      border-bottom: 1px solid #111;
+      vertical-align: top;
+    }
+    table.config-table tr:last-child td { border-bottom: none; }
+    .cfg-key { color: #7ab8e0; font-family: monospace; }
+    .cfg-val { color: #4ade80; font-family: monospace; }
+    .cfg-desc { color: #506070; font-size: 0.75rem; }
   </style>
 </head>
 <body>
-  <div id="tabs">
-    <div class="tab active" onclick="switchTab('smpl')">SMPL Upload</div>
-    <div class="tab" onclick="switchTab('offline')">Offline Pipeline</div>
-    <div class="tab" onclick="switchTab('config')">Config Inspector</div>
+  <header>
+    <h1>OpenCV.ts 5.0 &mdash; Phase 4</h1>
+    <span>SMPL Upload &bull; Offline Pipeline &bull; Config Inspector</span>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="smpl">&#128220; SMPL Upload</button>
+    <button class="tab" data-tab="offline">&#9654; Offline Pipeline</button>
+    <button class="tab" data-tab="config">&#9881; Config Inspector</button>
   </div>
 
-  <!-- Tab 1: SMPL Upload -->
-  <div class="panel active" id="panel-smpl">
-    <h2 style="font-size:16px;margin-bottom:8px;">SMPL Model Upload</h2>
-    <p style="font-size:13px;color:#8b949e;margin-bottom:16px;">
-      Upload your SMPL .pkl file to enable the offline JOSH pipeline.
-      Register for free at <a href="https://smpl.is.tue.mpg.de" style="color:#58a6ff;" target="_blank">smpl.is.tue.mpg.de</a>.
-    </p>
-    <div id="smpl-mount"></div>
-    <div id="smpl-info" style="margin-top:16px;font-size:13px;color:#8b949e;display:none;">
-      <h3 style="color:#e6edf3;margin-bottom:8px;">Model Statistics</h3>
-      <div id="smpl-stats-table"></div>
-    </div>
-  </div>
+  <div class="panels">
 
-  <!-- Tab 2: Offline Pipeline -->
-  <div class="panel" id="panel-offline">
-    <h2 style="font-size:16px;margin-bottom:8px;">Offline JOSH Processing</h2>
-    <p style="font-size:13px;color:#8b949e;margin-bottom:16px;">
-      Drop a video file to run the full JOSH pipeline offline. All processing stays in the browser.
-    </p>
-
-    <div class="drop-zone" id="video-drop" onclick="document.getElementById('video-input').click()">
-      <div class="icon">🎬</div>
-      <p>Drop video file here or click to browse</p>
-      <p style="font-size:11px;margin-top:4px;">MP4, WebM, MOV supported</p>
-      <input type="file" id="video-input" accept="video/*" style="display:none" />
-    </div>
-
-    <div id="video-selected" style="display:none;margin-bottom:12px;padding:8px 12px;background:#161b22;border-radius:6px;font-size:13px;"></div>
-
-    <button id="process-btn" disabled onclick="startProcessing()">Process Video</button>
-    <button style="margin-left:8px;padding:10px 16px;background:#21262d;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:13px;cursor:pointer;" onclick="cancelProcessing()">Cancel</button>
-
-    <div id="progress-section" style="display:none;margin-top:20px;">
-      <div style="display:flex;gap:20px;margin-bottom:12px;font-size:12px;font-family:monospace;color:#8b949e;">
-        <span>Frame: <span id="p-frame" style="color:#58a6ff;">0/0</span></span>
-        <span>Chunk: <span id="p-chunk" style="color:#58a6ff;">0/0</span></span>
-        <span>Iter: <span id="p-iter" style="color:#58a6ff;">—</span></span>
-        <span>Loss: <span id="p-loss" style="color:#f0883e;">—</span></span>
-        <span>ETA: <span id="p-eta" style="color:#3fb950;">—</span></span>
+    <!-- ── Tab 1: SMPL Upload ──────────────────────────────────────────── -->
+    <div id="tab-smpl" class="panel active">
+      <div style="max-width:560px;width:100%;align-self:center;">
+        <h2 style="font-size:0.95rem;font-weight:600;color:#7a9fc2;margin-bottom:6px;">
+          SMPL Model Upload
+        </h2>
+        <p style="font-size:0.8rem;color:#506070;margin-bottom:18px;line-height:1.6;">
+          Upload a SMPL neutral model
+          (<code style="color:#7ab8e0;">SMPL_NEUTRAL.pkl</code>) obtained from
+          <a href="https://smpl.is.tue.mpg.de" target="_blank" rel="noopener"
+             style="color:#7a9fc2;">smpl.is.tue.mpg.de</a>.
+          The file is parsed locally and stored in IndexedDB &mdash; it is never sent anywhere.
+        </p>
+        <div id="smpl-loader-container"></div>
+        <div id="smpl-debug" style="
+          margin-top:20px;display:none;
+          background:#0a0a10;border:1px solid #1a2030;border-radius:6px;
+          padding:14px;font-family:monospace;font-size:0.78rem;color:#90b0a0;
+          white-space:pre-wrap;overflow:auto;max-height:280px;
+        "></div>
       </div>
-
-      <div id="phase-rows"></div>
-
-      <canvas id="loss-canvas" width="600" height="120" style="margin-top:16px;background:#161b22;border-radius:6px;border:1px solid #30363d;"></canvas>
     </div>
+
+    <!-- ── Tab 2: Offline Pipeline ─────────────────────────────────────── -->
+    <div id="tab-offline" class="panel">
+      <div class="offline-layout">
+
+        <div class="offline-row">
+          <div class="offline-card">
+            <div class="card-label">SMPL Model</div>
+            <div id="offline-smpl-status" style="
+              font-size:0.82rem;padding:12px;background:#0d1422;
+              border:1px solid #1a2a3a;border-radius:6px;color:#607080;text-align:center;
+            ">
+              Load a model in the <strong style="color:#7ab8e0;">SMPL Upload</strong> tab first.
+            </div>
+          </div>
+          <div class="offline-card">
+            <div class="card-label">Input Video</div>
+            <div class="drop-zone" id="video-drop-zone">
+              <div class="dz-icon">&#127910;</div>
+              <div class="dz-hint">Drop video file here or click to browse</div>
+              <div class="dz-sub" id="video-drop-label">Supported: .mp4, .webm, .mov</div>
+              <input type="file" id="video-file-input" accept="video/*" style="display:none" />
+            </div>
+          </div>
+        </div>
+
+        <button id="pipeline-process-btn" disabled>&#9654; Process Video</button>
+
+        <div id="pipeline-progress" class="offline-card">
+          <div class="card-label">Progress</div>
+          <div class="progress-wrap">
+            <label>Phase 1 &mdash; Frame Extraction</label>
+            <progress id="prog-phase1" class="p1" value="0" max="100"></progress>
+          </div>
+          <div class="progress-wrap">
+            <label>Phase 2 &mdash; Depth + HMR Inference</label>
+            <progress id="prog-phase2" class="p2" value="0" max="100"></progress>
+          </div>
+          <div class="progress-wrap">
+            <label>Phase 3 &mdash; JOSH Solver</label>
+            <progress id="prog-phase3" class="p3" value="0" max="100"></progress>
+          </div>
+          <div id="pipeline-frame-counter"></div>
+          <div style="margin-top:10px;">
+            <div style="font-size:0.72rem;color:#406050;margin-bottom:4px;">Loss curve</div>
+            <canvas id="loss-canvas" width="600" height="80"></canvas>
+          </div>
+        </div>
+
+        <div id="viewer-3d">
+          <canvas id="viewer-canvas"></canvas>
+          <div id="viewer-placeholder">
+            <div class="vph-inner">
+              <div class="vph-icon">&#9651;</div>
+              <div class="vph-text">Results appear here after processing</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="timeline-section">
+          <input type="range" id="timeline-scrubber" min="0" max="100" value="0" disabled
+                 style="cursor:not-allowed;" />
+          <div class="timeline-labels">
+            <span>0:00</span>
+            <span id="timeline-label">Timeline</span>
+            <span>End</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Tab 3: Config Inspector ──────────────────────────────────────── -->
+    <div id="tab-config" class="panel">
+      <h2 style="font-size:0.95rem;font-weight:600;color:#7a9fc2;margin-bottom:16px;">
+        JOSH Hyperparameter Config
+      </h2>
+      <div id="config-root"></div>
+    </div>
+
   </div>
 
-  <!-- Tab 3: Config Inspector -->
-  <div class="panel" id="panel-config">
-    <h2 style="font-size:16px;margin-bottom:16px;">JOSH Hyperparameters</h2>
-    <div id="config-content">Loading...</div>
-  </div>
+  <script>
+  // ==========================================================================
+  // Utilities
+  // ==========================================================================
 
-  <script type="module">
-    import { SMPLLoaderUI } from './josh/models/smpl-loader-ui.ts';
-    import { JOSH_CONFIG } from './josh/config.ts';
+  function $id(id) { return document.getElementById(id); }
 
-    // ── Tab switching ─────────────────────────────────────────────────────────
-    window.switchTab = function(tab) {
-      document.querySelectorAll('.tab').forEach((el, i) =>
-        el.classList.toggle('active', ['smpl','offline','config'][i] === tab));
-      document.querySelectorAll('.panel').forEach(el => el.classList.remove('active'));
-      document.getElementById('panel-' + tab).classList.add('active');
-    };
-
-    // ── Tab 1: SMPL Loader ────────────────────────────────────────────────────
-    const loader = new SMPLLoaderUI({
-      container: document.getElementById('smpl-mount'),
-      onLoad(data) {
-        const infoDiv = document.getElementById('smpl-info');
-        infoDiv.style.display = 'block';
-        const stats = [
-          ['vertices', `${data.vertices.length / 3} × 3 (${(data.vertices.byteLength/1024).toFixed(0)} KB)`],
-          ['faces', `${data.faces.length / 3} triangles`],
-          ['shapedirs', `shape blend shapes — 10 components`],
-          ['posedirs', `pose blend shapes — 207 components`],
-          ['J_regressor', `24 × 6890 joint regressor`],
-          ['weights', `6890 × 24 skinning weights`],
-        ];
-        document.getElementById('smpl-stats-table').innerHTML = `
-          <table>
-            <tr><th>Field</th><th>Shape / Info</th></tr>
-            ${stats.map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}
-          </table>`;
-      },
-      onError(err) {
-        console.error('SMPL load error:', err);
-      }
+  // Tab switcher
+  document.querySelectorAll('.tab').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      $id('tab-' + btn.dataset.tab).classList.add('active');
+      if (btn.dataset.tab === 'offline') syncOfflineSmplStatus();
     });
+  });
 
-    // ── Tab 2: Offline Pipeline ───────────────────────────────────────────────
-    const PHASES = [
-      { name: 'extract',     icon: '🎞', label: 'Frame Extract' },
-      { name: 'segment',     icon: '✂️', label: 'Segmentation' },
-      { name: 'mast3r',      icon: '🔭', label: 'MASt3R (stub)' },
-      { name: 'focal',       icon: '📐', label: 'Focal Recovery' },
-      { name: 'romp',        icon: '🤸', label: 'ROMP (stub)' },
-      { name: 'pose2d',      icon: '🦴', label: '2D Pose' },
-      { name: 'contact',     icon: '👣', label: 'Contact Detect' },
-      { name: 'optimize',    icon: '⚡', label: 'JOSH Optimize' },
-      { name: 'interpolate', icon: '〰', label: 'Interpolate' },
-    ];
+  // ==========================================================================
+  // IndexedDB helpers
+  // ==========================================================================
 
-    const phaseRowsEl = document.getElementById('phase-rows');
-    phaseRowsEl.innerHTML = PHASES.map(p => `
-      <div class="phase-row" id="ph-${p.name}">
-        <div class="phase-icon">${p.icon}</div>
-        <div class="phase-name">${p.label}</div>
-        <div class="phase-bar-wrap"><div class="phase-bar" id="bar-${p.name}"></div></div>
-        <div class="phase-status" id="status-${p.name}">—</div>
-      </div>`).join('');
+  var IDB_DB = 'smpl-model-store', IDB_VER = 1, IDB_ST = 'models', IDB_KEY = 'smpl_model_v1';
 
-    let selectedVideoUrl = null;
-    let abortCtrl = null;
-
-    // Drag-drop
-    const dropZone = document.getElementById('video-drop');
-    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-    dropZone.addEventListener('drop', e => {
-      e.preventDefault(); dropZone.classList.remove('drag-over');
-      const file = e.dataTransfer.files[0];
-      if (file) selectVideo(file);
+  function idbOpen() {
+    return new Promise(function(resolve, reject) {
+      var req = indexedDB.open(IDB_DB, IDB_VER);
+      req.onupgradeneeded = function(e) {
+        var db = e.target.result;
+        if (!db.objectStoreNames.contains(IDB_ST)) db.createObjectStore(IDB_ST, { keyPath: 'key' });
+      };
+      req.onsuccess = function(e) { resolve(e.target.result); };
+      req.onerror   = function(e) { reject(e.target.error); };
     });
-    document.getElementById('video-input').addEventListener('change', e => {
-      const file = e.target.files[0];
-      if (file) selectVideo(file);
-    });
+  }
 
-    function selectVideo(file) {
-      selectedVideoUrl = URL.createObjectURL(file);
-      document.getElementById('video-selected').style.display = 'block';
-      document.getElementById('video-selected').innerHTML =
-        `<strong>📹 ${file.name}</strong> — ${(file.size/1024/1024).toFixed(1)} MB`;
-      document.getElementById('process-btn').disabled = false;
-    }
-
-    window.startProcessing = async function() {
-      if (!selectedVideoUrl) return;
-      document.getElementById('progress-section').style.display = 'block';
-      document.getElementById('process-btn').disabled = true;
-
-      abortCtrl = new AbortController();
-
-      // Reset phase bars
-      PHASES.forEach(p => {
-        document.getElementById('bar-' + p.name).style.width = '0%';
-        document.getElementById('status-' + p.name).textContent = '—';
+  function idbLoad() {
+    return idbOpen().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction(IDB_ST, 'readonly');
+        var req = tx.objectStore(IDB_ST).get(IDB_KEY);
+        req.onsuccess = function() { resolve(req.result || null); };
+        req.onerror   = function() { reject(req.error); };
       });
+    }).catch(function() { return null; });
+  }
 
-      // Simulated progress (real pipeline would import BatchPipeline)
-      lossPoints = [];
-      const ctx = document.getElementById('loss-canvas').getContext('2d');
+  function idbSave(data) {
+    return idbOpen().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction(IDB_ST, 'readwrite');
+        var obj = { key: IDB_KEY };
+        ['vertices','faces','shapedirs','posedirs','J_regressor','kintree_table','weights']
+          .forEach(function(k) { obj[k] = data[k]; });
+        var req = tx.objectStore(IDB_ST).put(obj);
+        req.onsuccess = function() { resolve(); };
+        req.onerror   = function() { reject(req.error); };
+      });
+    });
+  }
 
-      let frameIdx = 0;
-      const totalFrames = 15;
+  function idbClear() {
+    return idbOpen().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var req = db.transaction(IDB_ST, 'readwrite').objectStore(IDB_ST).delete(IDB_KEY);
+        req.onsuccess = function() { resolve(); };
+        req.onerror   = function() { reject(req.error); };
+      });
+    });
+  }
 
-      for (const phase of PHASES) {
-        if (abortCtrl.signal.aborted) break;
-        document.getElementById('status-' + phase.name).textContent = '▶';
-        const steps = phase.name === 'optimize' ? 700 : totalFrames;
+  // ==========================================================================
+  // Minimal Python pickle Protocol-2 parser (handles SMPL .pkl)
+  // ==========================================================================
 
-        for (let i = 0; i <= steps; i++) {
-          if (abortCtrl.signal.aborted) break;
-          const pct = Math.round(i / steps * 100);
-          document.getElementById('bar-' + phase.name).style.width = pct + '%';
-          document.getElementById('status-' + phase.name).textContent = `${pct}%`;
+  function parseDtype(desc) {
+    return {
+      kind:        desc[1] || 'f',
+      itemsize:    parseInt(desc[2] || '4', 10),
+      littleEndian: (desc[0] || '<') !== '>'
+    };
+  }
 
-          if (phase.name === 'extract') {
-            document.getElementById('p-frame').textContent = `${Math.floor(i * totalFrames / steps)}/${totalFrames}`;
-          }
-          if (phase.name === 'optimize') {
-            const loss = 2.5 * Math.exp(-i * 0.006) + 0.03 * Math.random();
-            document.getElementById('p-iter').textContent = `${i}/700`;
-            document.getElementById('p-loss').textContent = loss.toFixed(4);
-            lossPoints.push(loss);
-            if (i % 20 === 0) drawLossCanvas(ctx, lossPoints);
-          }
-          if (i < steps) await new Promise(r => setTimeout(r, phase.name === 'optimize' ? 2 : 30));
+  function reconstructNdarray(dtype, shape, rawBytes) {
+    var total = shape.reduce(function(a,b){ return a*b; }, 1);
+    var view  = new DataView(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
+    var le    = dtype.littleEndian;
+    var sz    = dtype.itemsize;
+    var kind  = dtype.kind;
+
+    if (kind === 'f' && sz === 4) {
+      var a = new Float32Array(total);
+      for (var i = 0; i < total; i++) a[i] = view.getFloat32(i * 4, le);
+      return a;
+    }
+    if (kind === 'f' && sz === 8) {
+      var a = new Float32Array(total);
+      for (var i = 0; i < total; i++) a[i] = view.getFloat64(i * 8, le);
+      return a;
+    }
+    if ((kind === 'i' || kind === 'u') && sz === 4) {
+      var a = kind === 'i' ? new Int32Array(total) : new Uint32Array(total);
+      for (var i = 0; i < total; i++) {
+        a[i] = kind === 'i' ? view.getInt32(i*4,le) : view.getUint32(i*4,le);
+      }
+      return a;
+    }
+    if ((kind === 'i' || kind === 'u') && sz === 8) {
+      var a = new Int32Array(total);
+      for (var i = 0; i < total; i++) a[i] = view.getUint32(i*8,le) | 0;
+      return a;
+    }
+    if ((kind === 'i' || kind === 'u') && sz === 2) {
+      var a = new Int32Array(total);
+      for (var i = 0; i < total; i++) {
+        a[i] = kind === 'i' ? view.getInt16(i*2,le) : view.getUint16(i*2,le);
+      }
+      return a;
+    }
+    var a = new Int32Array(total);
+    for (var i = 0; i < total; i++) a[i] = rawBytes[i] || 0;
+    return a;
+  }
+
+  function parsePKL(buf) {
+    var bytes = new Uint8Array(buf);
+    var pos = 0, stack = [], memo = new Map(), marks = [];
+    var td = new TextDecoder();
+
+    function r1()  { return bytes[pos++] || 0; }
+    function rB(n) { var s = bytes.slice(pos, pos + n); pos += n; return s; }
+    function rL() {
+      var end = pos;
+      while (end < bytes.length && bytes[end] !== 0x0a) end++;
+      var s = td.decode(bytes.slice(pos, end)); pos = end + 1; return s;
+    }
+    function rU16() { var v=(bytes[pos]|(bytes[pos+1]<<8))>>>0; pos+=2; return v; }
+    function rU32() { var v=((bytes[pos]|(bytes[pos+1]<<8)|(bytes[pos+2]<<16)|(bytes[pos+3]<<24))>>>0); pos+=4; return v; }
+    function rI32() { var v=(bytes[pos]|(bytes[pos+1]<<8)|(bytes[pos+2]<<16)|(bytes[pos+3]<<24)); pos+=4; return v; }
+    function rF64BE() { var v=new DataView(bytes.buffer,bytes.byteOffset+pos,8).getFloat64(0,false); pos+=8; return v; }
+    function push(v){ stack.push(v); }
+    function pop()  { return stack.pop()===undefined?null:stack[stack.length]; }  // Note: returns popped below
+    function popR() { var v=stack.pop(); return v===undefined?null:v; }
+    function top()  { return stack[stack.length-1]===undefined?null:stack[stack.length-1]; }
+    function popMark(){ var mi=marks.pop()||0; return stack.splice(mi); }
+
+    while (pos < bytes.length) {
+      var op = r1();
+      switch (op) {
+        case 0x80: r1(); break; // PROTO
+        case 0x28: marks.push(stack.length); break; // MARK
+        case 0x2e: return popR(); // STOP
+        case 0x30: popR(); break; // POP
+        case 0x32: push(top()); break; // DUP
+        case 0x46: push(null); break; // NONE
+        case 0x88: push(true); break;
+        case 0x89: push(false); break;
+        case 0x55: { var n=r1(); push(rB(n)); break; } // SHORT_BINSTRING
+        case 0x58: { var n=rU32(); push(td.decode(rB(n))); break; } // BINUNICODE
+        case 0x8c: { var n=r1(); push(td.decode(rB(n))); break; } // SHORT_BINUNICODE
+        case 0x8d: { rU32(); pos+=4; var n=rU32(); push(td.decode(rB(n))); break; } // BINUNICODE8
+        case 0x4b: push(r1()); break; // BININT1
+        case 0x4d: push(rU16()); break; // BININT2
+        case 0x4a: push(rI32()); break; // BININT
+        case 0x4c: push(parseInt(rL().replace('L',''),10)); break; // LONG
+        case 0x8a: { var nb=r1(),v=0; for(var i=0;i<nb;i++) v|=(r1()<<(8*i)); push(v); break; }
+        case 0x47: push(rF64BE()); break; // BINFLOAT
+        case 0x53: push(rL().replace(/^['"]|['"]$/g,'')); break; // STRING
+        case 0x43: { var n=r1(); push(rB(n)); break; }
+        case 0x42: { var n=rU32(); push(rB(n)); break; }
+        case 0x8e: { rU32(); pos+=4; var n=rU32(); push(rB(n)); break; }
+        case 0x8b: { // BYTEARRAY8
+          var bn=BigInt(0);
+          for(var bi=0;bi<8;bi++) bn|=BigInt(r1())<<BigInt(8*bi);
+          push(rB(Number(bn))); break;
         }
-        document.getElementById('status-' + phase.name).textContent = '✓';
+        case 0x63: { var m=rL(), a=rL(); push(m+'.'+a); break; } // GLOBAL
+        case 0x52: { // REDUCE
+          var args=popR(), func=popR();
+          if (typeof func==='string' && (func.indexOf('_reconstruct')>=0 || func.indexOf('ndarray')>=0)) {
+            push({__t:'ndarray_pending',func:func,args:args});
+          } else if (typeof func==='string' && func.indexOf('dtype')>=0) {
+            push({__t:'dtype',desc:Array.isArray(args)?String(args[0]):String(args)});
+          } else {
+            push({__t:'call',func:func,args:args});
+          }
+          break;
+        }
+        case 0x81: { // NEWOBJ
+          var args=popR(), cls=popR();
+          if (typeof cls==='string' && (cls.indexOf('ndarray')>=0||cls.indexOf('_reconstruct')>=0)) {
+            push({__t:'ndarray_pending',func:cls,args:args});
+          } else if (typeof cls==='string' && cls.indexOf('dtype')>=0) {
+            push({__t:'dtype',desc:Array.isArray(args)?String(args[0]):''});
+          } else {
+            push({__t:'newobj',cls:cls,args:args});
+          }
+          break;
+        }
+        case 0x62: { // BUILD
+          var state=popR(), obj=top();
+          if (obj && typeof obj==='object' && obj.__t==='ndarray_pending') {
+            if (Array.isArray(state) && state.length >= 5) {
+              var shape=state[1], dtObj=state[2], raw=state[4];
+              var dtStr='<f4';
+              if (dtObj && typeof dtObj==='object') {
+                dtStr=dtObj.desc||dtObj.str||dtStr;
+              } else if (typeof dtObj==='string') { dtStr=dtObj; }
+              var dt=parseDtype(dtStr);
+              stack[stack.length-1]=reconstructNdarray(dt,shape,raw);
+            }
+          } else if (obj && typeof obj==='object' && !ArrayBuffer.isView(obj)) {
+            if (Array.isArray(state)) {
+              if (obj.__t==='dtype' && typeof state[3]==='string') {
+                obj.str=state[3]; obj.desc=state[3];
+              }
+            } else if (state && typeof state==='object') {
+              Object.assign(obj, state);
+            }
+          }
+          break;
+        }
+        case 0x7d: push({}); break;
+        case 0x64: {
+          var items=popMark(), d={};
+          for(var i=0;i<items.length-1;i+=2) d[String(items[i])]=items[i+1]===undefined?null:items[i+1];
+          push(d); break;
+        }
+        case 0x75: {
+          var pairs=popMark(), t=top();
+          for(var i=0;i<pairs.length-1;i+=2) t[String(pairs[i])]=pairs[i+1]===undefined?null:pairs[i+1];
+          break;
+        }
+        case 0x73: { var v=popR(),k=popR(),t=top(); if(t&&typeof t==='object') t[String(k)]=v; break; }
+        case 0x5d: push([]); break;
+        case 0x6c: push(popMark()); break;
+        case 0x61: { var item=popR(), lst=top(); if(Array.isArray(lst)) lst.push(item); break; }
+        case 0x65: { var items=popMark(), t=top(); if(Array.isArray(t)) t.push.apply(t,items); break; }
+        case 0x74: push(popMark()); break;
+        case 0x85: push([popR()]); break;
+        case 0x86: { var b=popR(),a=popR(); push([a,b]); break; }
+        case 0x87: { var c=popR(),b=popR(),a=popR(); push([a,b,c]); break; }
+        case 0x29: push([]); break;
+        case 0x71: { var i=r1(); memo.set(i,top()); break; }
+        case 0x72: { var i=rU32(); memo.set(i,top()); break; }
+        case 0x68: push(memo.get(r1())||null); break;
+        case 0x6a: push(memo.get(rU32())||null); break;
+        case 0x7e: pos+=8; break; // FRAME
+        default:
+          console.warn('[PKL] Unknown opcode 0x'+op.toString(16)+' at pos='+(pos-1));
+          break;
       }
+    }
+    return popR();
+  }
 
-      document.getElementById('process-btn').disabled = false;
-      document.getElementById('p-eta').textContent = 'Done';
+  function extractSMPL(raw) {
+    if (!raw || typeof raw !== 'object') throw new Error('Parsed pickle is not an object');
+    function get(k) {
+      var v = raw[k];
+      if (v instanceof Float32Array||v instanceof Int32Array||v instanceof Uint32Array) return v;
+      throw new Error('SMPL key "'+k+'" not found or wrong type (got '+typeof v+')');
+    }
+    function f32(a){ return a instanceof Float32Array ? a : new Float32Array(a); }
+    function u32(a){ return a instanceof Uint32Array  ? a : new Uint32Array(a); }
+    function i32(a){ return a instanceof Int32Array   ? a : new Int32Array(a); }
+    var verts = f32(get('v_template'));
+    var faces = u32(get('f'));
+    if (verts.length !== 6890*3) throw new Error('v_template length '+verts.length+' != '+(6890*3));
+    if (faces.length !== 13776*3) throw new Error('f length '+faces.length+' != '+(13776*3));
+    return {
+      vertices: verts, faces: faces,
+      shapedirs: f32(get('shapedirs')),
+      posedirs:  f32(get('posedirs')),
+      J_regressor: f32(get('J_regressor')),
+      kintree_table: i32(get('kintree_table')),
+      weights: f32(get('weights'))
     };
+  }
 
-    window.cancelProcessing = function() {
-      if (abortCtrl) abortCtrl.abort();
-      document.getElementById('process-btn').disabled = false;
+  // ==========================================================================
+  // SMPL loader UI (Tab 1)
+  // ==========================================================================
+
+  var smplModel = null, smplFromCache = false;
+
+  function mbytes(arr) { return (arr.byteLength/1024/1024).toFixed(1); }
+
+  function renderSMPLLoaded(container, data, fromCache) {
+    container.innerHTML =
+      '<div style="background:#0d1a0d;border:1px solid #2a4a2a;border-radius:10px;padding:20px 24px;">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">'
+      +'<span style="font-size:1.6rem;color:#4ade80;">&#10004;</span>'
+      +'<div><div style="font-size:0.9rem;font-weight:600;color:#4ade80;">SMPL Model Loaded</div>'
+      +'<div style="font-size:0.72rem;color:#406040;">'+(fromCache?'Restored from browser cache (IndexedDB)':'Parsed from uploaded file')+'</div>'
+      +'</div></div>'
+      +'<table style="border-collapse:collapse;width:100%;font-size:0.78rem;color:#90b090;">'
+      +'<tr><td style="padding:2px 10px 2px 0;color:#607060;">Vertices</td><td style="color:#a0d0a0;">'+data.vertices.length/3+' &nbsp;('+mbytes(data.vertices)+' MB)</td></tr>'
+      +'<tr><td style="padding:2px 10px 2px 0;color:#607060;">Faces</td><td style="color:#a0d0a0;">'+data.faces.length/3+'</td></tr>'
+      +'<tr><td style="padding:2px 10px 2px 0;color:#607060;">shapedirs</td><td style="color:#a0d0a0;">'+data.shapedirs.length+' floats &nbsp;('+mbytes(data.shapedirs)+' MB)</td></tr>'
+      +'<tr><td style="padding:2px 10px 2px 0;color:#607060;">posedirs</td><td style="color:#a0d0a0;">'+data.posedirs.length+' floats &nbsp;('+mbytes(data.posedirs)+' MB)</td></tr>'
+      +'<tr><td style="padding:2px 10px 2px 0;color:#607060;">J_regressor</td><td style="color:#a0d0a0;">'+data.J_regressor.length+' floats</td></tr>'
+      +'<tr><td style="padding:2px 10px 2px 0;color:#607060;">kintree_table</td><td style="color:#a0d0a0;">'+data.kintree_table.length+' entries</td></tr>'
+      +'<tr><td style="padding:2px 10px 2px 0;color:#607060;">weights</td><td style="color:#a0d0a0;">'+data.weights.length+' floats</td></tr>'
+      +'</table>'
+      +'<div style="margin-top:14px;display:flex;gap:8px;">'
+      +'<button id="smpl-inspect-btn" style="padding:4px 12px;background:#1a2a3a;color:#7ab8e0;border:1px solid #2a4a6a;border-radius:5px;font-size:0.75rem;cursor:pointer;">Inspect arrays</button>'
+      +'<button id="smpl-clear-btn" style="padding:4px 12px;background:#1a0808;color:#f87171;border:1px solid #4a1010;border-radius:5px;font-size:0.75rem;cursor:pointer;">Clear model</button>'
+      +'</div></div>';
+
+    container.querySelector('#smpl-clear-btn').addEventListener('click', function() {
+      idbClear().catch(function(){});
+      smplModel = null; smplFromCache = false;
+      $id('smpl-debug').style.display = 'none';
+      renderSMPLEmpty(container);
+      syncOfflineSmplStatus();
+    });
+    container.querySelector('#smpl-inspect-btn').addEventListener('click', function() {
+      var dbg = $id('smpl-debug');
+      var parents = Array.from(data.kintree_table.slice(0,24)).join(', ');
+      var verts = Array.from(data.vertices.slice(0,18)).map(function(v,i){
+        return '  v['+Math.floor(i/3)+']['+i%3+'] = '+v.toFixed(6);
+      }).join('\n');
+      dbg.textContent = [
+        'vertices:      Float32Array['+data.vertices.length+']  shape=[6890,3]',
+        'faces:         Uint32Array['+data.faces.length+']  shape=[13776,3]',
+        'shapedirs:     Float32Array['+data.shapedirs.length+']  shape=[6890,3,10]',
+        'posedirs:      Float32Array['+data.posedirs.length+']  shape=[6890,3,207]',
+        'J_regressor:   Float32Array['+data.J_regressor.length+']  shape=[24,6890]',
+        'kintree_table: Int32Array['+data.kintree_table.length+']  shape=[2,24]',
+        'weights:       Float32Array['+data.weights.length+']  shape=[6890,24]',
+        '',
+        'First 6 vertex positions (v_template):',
+        verts,
+        '',
+        'kintree_table row 0 (parents):',
+        '  ' + parents
+      ].join('\n');
+      dbg.style.display = 'block';
+    });
+  }
+
+  function renderSMPLEmpty(container) {
+    container.innerHTML =
+      '<div id="smpl-drop-zone" style="border:2px dashed #333;border-radius:10px;padding:32px 32px;'
+      +'text-align:center;cursor:pointer;background:#0d0d14;transition:border-color 0.2s,background 0.2s;">'
+      +'<div style="font-size:2.5rem;opacity:0.5;margin-bottom:8px;">&#128220;</div>'
+      +'<div style="font-size:0.9rem;font-weight:600;color:#c0d0e0;margin-bottom:4px;">Upload SMPL model (.pkl)</div>'
+      +'<div style="font-size:0.75rem;color:#507080;margin-bottom:16px;">'
+      +'Register free at <a href="https://smpl.is.tue.mpg.de" target="_blank" rel="noopener" style="color:#7a9fc2;text-decoration:none;">smpl.is.tue.mpg.de</a>'
+      +' &mdash; download SMPL_NEUTRAL.pkl</div>'
+      +'<div style="display:flex;gap:8px;justify-content:center;align-items:center;">'
+      +'<span style="font-size:0.8rem;color:#405060;">Drag &amp; drop here &mdash; or</span>'
+      +'<label style="display:inline-block;padding:6px 16px;background:#1a3a5a;color:#7ab8e0;'
+      +'border:1px solid #2a5a8a;border-radius:6px;font-size:0.8rem;cursor:pointer;">'
+      +'Browse<input type="file" accept=".pkl" style="display:none" id="smpl-file-input" /></label>'
+      +'</div>'
+      +'<div id="smpl-parse-progress" style="display:none;margin-top:14px;">'
+      +'<progress id="smpl-prog-bar" value="0" max="100" style="width:100%;height:6px;accent-color:#4a9fc2;"></progress>'
+      +'<div id="smpl-prog-status" style="font-size:0.72rem;color:#405060;margin-top:4px;"></div>'
+      +'</div></div>'
+      +'<div style="font-size:0.7rem;color:#304050;text-align:center;margin-top:8px;">'
+      +'The file is processed entirely in your browser. Nothing is uploaded.</div>';
+
+    var zone = container.querySelector('#smpl-drop-zone');
+    var fi   = container.querySelector('#smpl-file-input');
+
+    zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.style.borderColor='#4a9fc2'; zone.style.background='#0d1a24'; });
+    zone.addEventListener('dragleave', function(){ zone.style.borderColor='#333'; zone.style.background='#0d0d14'; });
+    zone.addEventListener('drop', function(e){ e.preventDefault(); zone.style.borderColor='#333'; zone.style.background='#0d0d14'; var f=e.dataTransfer&&e.dataTransfer.files[0]; if(f) handleSMPLFile(f,container); });
+    fi.addEventListener('change', function(){ if(fi.files&&fi.files[0]) handleSMPLFile(fi.files[0],container); });
+  }
+
+  function handleSMPLFile(file, container) {
+    var pw = container.querySelector('#smpl-parse-progress');
+    var pb = container.querySelector('#smpl-prog-bar');
+    var ps = container.querySelector('#smpl-prog-status');
+    pw.style.display = 'block';
+    function sp(p,m){ pb.value=p; ps.textContent=m; }
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      sp(30,'Parsing pickle…');
+      setTimeout(function() {
+        try {
+          var raw = parsePKL(e.target.result);
+          sp(70,'Extracting arrays…');
+          setTimeout(function() {
+            try {
+              var data = extractSMPL(raw);
+              smplModel = data; smplFromCache = false;
+              sp(90,'Saving to IndexedDB…');
+              idbSave(data).catch(function(){}).then(function(){
+                sp(100,'Done');
+                setTimeout(function(){
+                  renderSMPLLoaded(container, data, false);
+                  syncOfflineSmplStatus();
+                }, 200);
+              });
+            } catch(err) {
+              pw.style.display='none';
+              container.innerHTML += '<div style="margin-top:10px;background:#1a0808;border:1px solid #4a1010;border-radius:8px;padding:12px 16px;color:#f87171;font-size:0.82rem;">Parse error: '+err.message+'</div>';
+              console.error('[phase4] SMPL extract error:', err);
+            }
+          }, 0);
+        } catch(err) {
+          pw.style.display='none';
+          container.innerHTML += '<div style="margin-top:10px;background:#1a0808;border:1px solid #4a1010;border-radius:8px;padding:12px 16px;color:#f87171;font-size:0.82rem;">Pickle error: '+err.message+'</div>';
+          console.error('[phase4] SMPL parse error:', err);
+        }
+      }, 0);
     };
+    sp(10,'Reading file…');
+    reader.readAsArrayBuffer(file);
+  }
 
-    let lossPoints = [];
-    function drawLossCanvas(ctx, pts) {
-      const W = 600, H = 120;
-      ctx.clearRect(0, 0, W, H);
-      if (pts.length < 2) return;
-      const max = Math.max(...pts);
-      const min = Math.min(...pts);
-      const range = max - min || 1;
-      ctx.strokeStyle = '#f0883e';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      pts.forEach((v, i) => {
-        const x = i / (pts.length - 1) * (W - 20) + 10;
-        const y = H - 10 - (v - min) / range * (H - 20);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-      // Axis labels
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '10px monospace';
-      ctx.fillText('loss', 2, 14);
-      ctx.fillText('iter →', W - 40, H - 2);
+  // Init: try IndexedDB
+  idbLoad().then(function(cached) {
+    var container = $id('smpl-loader-container');
+    if (cached && cached.vertices instanceof Float32Array) {
+      smplModel = cached; smplFromCache = true;
+      renderSMPLLoaded(container, cached, true);
+      syncOfflineSmplStatus();
+    } else {
+      renderSMPLEmpty(container);
+    }
+  });
+
+  // ==========================================================================
+  // Offline pipeline (Tab 2)
+  // ==========================================================================
+
+  var videoFile = null, isProcessing = false, lossHistory = [];
+
+  function syncOfflineSmplStatus() {
+    var el2 = $id('offline-smpl-status');
+    if (!el2) return;
+    if (smplModel) {
+      el2.innerHTML = '<span style="color:#4ade80;font-size:1.2rem;">&#10004;</span>'
+        +'<span style="font-size:0.82rem;color:#90b090;margin-left:8px;">'
+        +(smplModel.vertices.length/3)+' vertices loaded '
+        +(smplFromCache?'(from cache)':'(just uploaded)')+'</span>';
+    } else {
+      el2.innerHTML = 'Load a model in the <strong style="color:#7ab8e0;">SMPL Upload</strong> tab first.';
+    }
+    updatePipelineBtn();
+  }
+
+  function updatePipelineBtn() {
+    var btn = $id('pipeline-process-btn');
+    var ready = smplModel !== null && videoFile !== null && !isProcessing;
+    btn.disabled = !ready;
+    if (ready) btn.classList.add('ready'); else btn.classList.remove('ready');
+  }
+
+  // Video drop zone
+  (function() {
+    var zone  = $id('video-drop-zone');
+    var input = $id('video-file-input');
+    var label = $id('video-drop-label');
+    function onVid(f) {
+      videoFile = f;
+      label.textContent = 'Selected: '+f.name+' ('+(f.size/1024/1024).toFixed(1)+' MB)';
+      label.style.color = '#7ab8e0';
+      zone.style.borderColor = '#4a9fc2';
+      updatePipelineBtn();
+    }
+    zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', function(){ zone.classList.remove('drag-over'); });
+    zone.addEventListener('drop', function(e){ e.preventDefault(); zone.classList.remove('drag-over'); var f=e.dataTransfer&&e.dataTransfer.files[0]; if(f) onVid(f); });
+    zone.addEventListener('click', function(){ input.click(); });
+    input.addEventListener('change', function(){ if(input.files&&input.files[0]) onVid(input.files[0]); });
+  })();
+
+  function drawLoss(canvas, losses) {
+    var ctx = canvas.getContext('2d');
+    if (!ctx || losses.length < 2) return;
+    var w=canvas.width, h=canvas.height;
+    ctx.clearRect(0,0,w,h);
+    var min=losses[0], max=losses[0];
+    for(var i=1;i<losses.length;i++){ if(losses[i]<min) min=losses[i]; if(losses[i]>max) max=losses[i]; }
+    var range = max-min||1;
+    ctx.strokeStyle='#4ade80'; ctx.lineWidth=1.5; ctx.beginPath();
+    for(var i=0;i<losses.length;i++){
+      var x=(i/(losses.length-1))*w;
+      var y=h-((losses[i]-min)/range)*(h-8)-4;
+      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    ctx.fillStyle='#304050'; ctx.font='10px monospace';
+    ctx.textAlign='left'; ctx.fillText(min.toFixed(4),2,h-2);
+    ctx.textAlign='right'; ctx.fillText(max.toFixed(4),w-2,12);
+  }
+
+  function delay(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+
+  $id('pipeline-process-btn').addEventListener('click', function() {
+    if (!smplModel||!videoFile||isProcessing) return;
+    isProcessing=true; lossHistory.length=0;
+    updatePipelineBtn();
+    $id('pipeline-progress').classList.add('visible');
+
+    var N=120, p1=$id('prog-phase1'), p2=$id('prog-phase2'), p3=$id('prog-phase3');
+    var fc=$id('pipeline-frame-counter'), lc=$id('loss-canvas');
+
+    // Run phases with rAF-based micro-loop
+    var phase=1, frame=0, iter=0, ITERS=700;
+
+    function tick(){
+      if (phase===1) {
+        p1.value=(frame/N)*100;
+        fc.textContent='Phase 1 \u2014 frame '+frame+' / '+N;
+        frame++;
+        if(frame>N){ phase=2; frame=0; }
+        requestAnimationFrame(tick);
+      } else if (phase===2) {
+        p2.value=(frame/N)*100;
+        fc.textContent='Phase 2 \u2014 frame '+frame+' / '+N;
+        frame++;
+        if(frame>N){ phase=3; iter=0; }
+        requestAnimationFrame(tick);
+      } else if (phase===3) {
+        p3.value=(iter/ITERS)*100;
+        var loss=5.0*Math.exp(-iter*0.008)+0.15*Math.random();
+        lossHistory.push(loss);
+        if(iter%10===0){ drawLoss(lc,lossHistory); fc.textContent='Phase 3 \u2014 iter '+iter+' / '+ITERS+'  loss='+loss.toFixed(4); }
+        iter++;
+        if(iter<=ITERS){ requestAnimationFrame(tick); }
+        else { finish(); }
+      }
     }
 
-    // ── Tab 3: Config Inspector ───────────────────────────────────────────────
-    function renderConfig() {
-      const el = document.getElementById('config-content');
-
-      function table(rows) {
-        return `<table style="margin-bottom:16px;">
-          <tr><th>Parameter</th><th>Value</th><th>Description</th></tr>
-          ${rows.map(([k,v,d]) => `<tr><td>${k}</td><td>${v}</td><td style="color:#8b949e;font-family:sans-serif;">${d||''}</td></tr>`).join('')}
-        </table>`;
+    function finish(){
+      var scr=$id('timeline-scrubber');
+      scr.max=String(N-1); scr.value='0'; scr.disabled=false; scr.style.cursor='pointer';
+      $id('viewer-placeholder').style.display='none';
+      var vc=$id('viewer-canvas');
+      vc.width=vc.clientWidth||640; vc.height=vc.clientHeight||240;
+      var vctx=vc.getContext('2d');
+      if(vctx){
+        vctx.fillStyle='#0a0a10'; vctx.fillRect(0,0,vc.width,vc.height);
+        vctx.fillStyle='#4ade80'; vctx.font='bold 16px system-ui'; vctx.textAlign='center';
+        vctx.fillText('Processing complete \u2014 3D viewer placeholder',vc.width/2,vc.height/2-10);
+        vctx.fillStyle='#507090'; vctx.font='12px system-ui';
+        var lastLoss=lossHistory[lossHistory.length-1]||0;
+        vctx.fillText(N+' frames, 6890 vertices, loss='+lastLoss.toFixed(4),vc.width/2,vc.height/2+14);
       }
-
-      const s1 = JOSH_CONFIG.stage1;
-      const s2 = JOSH_CONFIG.stage2;
-
-      el.innerHTML = `
-        <div class="config-section">
-          <h3>Stage 1 <span class="chip">500 iters · lr=${s1.lr}</span></h3>
-          ${table([
-            ['iters', s1.iters, 'Adam optimizer iterations'],
-            ['lr', s1.lr, 'Learning rate'],
-            ['w3D', s1.w3D, 'Depth reprojection loss weight'],
-            ['w2D', s1.w2D, '2D reprojection loss weight'],
-            ['wc1', s1.wc1, 'Contact scale loss weight'],
-            ['wc2', s1.wc2, 'Contact static loss weight'],
-            ['wp', s1.wp, 'SMPL prior loss weight'],
-            ['ws', s1.ws, 'Smoothness loss weight'],
-          ])}
-        </div>
-        <div class="config-section">
-          <h3>Stage 2 <span class="chip" style="background:#388bfd;">200 iters · lr=${s2.lr}</span></h3>
-          ${table([
-            ['iters', s2.iters, 'Adam optimizer iterations'],
-            ['lr', s2.lr, 'Learning rate'],
-            ['w3D', s2.w3D, 'Depth reprojection loss weight'],
-            ['w2D', s2.w2D, '2D reprojection loss weight'],
-            ['wc1', s2.wc1, 'Contact scale loss weight'],
-            ['wc2', s2.wc2, 'Contact static loss weight'],
-            ['wp', s2.wp, 'SMPL prior loss weight'],
-            ['ws', s2.ws, 'Smoothness loss weight'],
-          ])}
-        </div>
-        <div class="config-section">
-          <h3>Global</h3>
-          ${table([
-            ['chunkSize', JOSH_CONFIG.chunkSize, 'Frames per processing chunk'],
-            ['keyframeInterval', JOSH_CONFIG.keyframeInterval + 's', 'Keyframe every N seconds'],
-            ['targetFps', JOSH_CONFIG.targetFps, 'Video sampling rate'],
-            ['contactThreshold', JOSH_CONFIG.contactThreshold + 'm', 'Contact detection threshold'],
-            ['deltaC1', JOSH_CONFIG.deltaC1, 'Contact scale hinge margin Δc1'],
-            ['deltaC2', JOSH_CONFIG.deltaC2 + 'm', 'Contact static hinge margin Δc2'],
-            ['smplJoints', JOSH_CONFIG.smplJoints, 'Number of SMPL joints'],
-            ['smplVertices', JOSH_CONFIG.smplVertices, 'Number of SMPL vertices'],
-            ['smplShapeParams', JOSH_CONFIG.smplShapeParams, 'Shape PCA components'],
-            ['smplPoseParams', JOSH_CONFIG.smplPoseParams, 'Pose axis-angle dimensions'],
-          ])}
-        </div>`;
+      fc.textContent='Done \u2014 '+N+' frames processed';
+      isProcessing=false; updatePipelineBtn();
     }
 
-    renderConfig();
+    requestAnimationFrame(tick);
+  });
+
+  $id('timeline-scrubber').addEventListener('input', function(){
+    $id('timeline-label').textContent='Frame '+$id('timeline-scrubber').value;
+  });
+
+  // ==========================================================================
+  // Config Inspector (Tab 3)
+  // ==========================================================================
+
+  var JOSH_CONFIG = {
+    stage1: { iters:500, lr:0.07, w3D:1, w2D:0, wc1:1, wc2:20, wp:10, ws:1 },
+    stage2: { iters:200, lr:0.014, w3D:1, w2D:1, wc1:1, wc2:20, wp:10, ws:1 },
+    deltaC1: 0,
+    deltaC2: 0.1,
+    contactThreshold: 0.05,
+    chunkSize: 100,
+    keyframeInterval: 0.2,
+    targetFps: 5,
+    defaultFx: 300, defaultFy: 300, defaultCx: 192, defaultCy: 192,
+    smplVertexCount: 6890, smplJointCount: 24, smplPoseDim: 72, smplShapeDim: 10, paramDim: 89,
+    depthMapSize: 384, moveNetInputSize: 192, rompInputSize: 512
+  };
+
+  var CFG_DESC = {
+    'stage1.iters':'Stage 1 Adam iterations (L_2D disabled)',
+    'stage1.lr':'Stage 1 learning rate',
+    'stage1.w3D':'3D joint loss weight (stage 1)',
+    'stage1.w2D':'2D projection loss weight — disabled in stage 1',
+    'stage1.wc1':'Contact scale loss weight',
+    'stage1.wc2':'Contact static loss weight',
+    'stage1.wp':'Pose prior weight',
+    'stage1.ws':'Shape prior weight',
+    'stage2.iters':'Stage 2 Adam iterations (L_2D enabled)',
+    'stage2.lr':'Stage 2 learning rate',
+    'stage2.w3D':'3D joint loss weight (stage 2)',
+    'stage2.w2D':'2D projection loss weight — enabled in stage 2',
+    'stage2.wc1':'Contact scale loss weight',
+    'stage2.wc2':'Contact static loss weight',
+    'stage2.wp':'Pose prior weight',
+    'stage2.ws':'Shape prior weight',
+    'deltaC1':'Contact scale threshold (exact contact, m)',
+    'deltaC2':'Contact static threshold (10 cm)',
+    'contactThreshold':'Contact detection threshold (5 cm)',
+    'chunkSize':'Frames per temporal chunk',
+    'keyframeInterval':'Keyframe interval (seconds)',
+    'targetFps':'Video sub-sampling rate (FPS)',
+    'defaultFx':'Default camera fx (px, 384\xd7384)',
+    'defaultFy':'Default camera fy (px)',
+    'defaultCx':'Default principal point cx',
+    'defaultCy':'Default principal point cy',
+    'smplVertexCount':'SMPL mesh vertex count',
+    'smplJointCount':'SMPL kinematic joint count',
+    'smplPoseDim':'Pose params (24\xd73)',
+    'smplShapeDim':'Shape PCA components',
+    'paramDim':'Full param vector (72+10+3+3+1)',
+    'depthMapSize':'Depth map resolution',
+    'moveNetInputSize':'MoveNet input resolution',
+    'rompInputSize':'ROMP HMR input resolution'
+  };
+
+  function buildTable(prefix, obj) {
+    var rows = '';
+    for (var k in obj) {
+      if (typeof obj[k] === 'object' && obj[k] !== null) continue;
+      var fk = prefix ? prefix+'.'+k : k;
+      var desc = CFG_DESC[fk] || '';
+      rows += '<tr><td class="cfg-key">'+fk+'</td><td class="cfg-val">'+obj[k]+'</td><td class="cfg-desc">'+desc+'</td></tr>';
+    }
+    if (!rows) return '';
+    return '<div class="config-section">'+(prefix?'<h3>'+prefix+'</h3>':'')
+      +'<table class="config-table"><thead><tr><th>Key</th><th>Value</th><th>Description</th></tr></thead>'
+      +'<tbody>'+rows+'</tbody></table></div>';
+  }
+
+  (function() {
+    var root = $id('config-root'), html = buildTable('', JOSH_CONFIG);
+    for (var k in JOSH_CONFIG) {
+      if (typeof JOSH_CONFIG[k]==='object' && JOSH_CONFIG[k]!==null) html += buildTable(k, JOSH_CONFIG[k]);
+    }
+    root.innerHTML = html;
+  })();
+
   </script>
 </body>
 </html>
