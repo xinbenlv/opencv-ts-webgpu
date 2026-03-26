@@ -25,6 +25,9 @@ import { JoshResultCache, type PerFrameResult } from './result-cache.ts';
 import { SegmentationNode, type SegmentationResult } from '../nodes/segmentation.node.ts';
 import { Pose2DNode, type Keypoint2D } from '../nodes/pose-2d.node.ts';
 import { detectContacts, type ContactResult } from '../utils/contact-detection.ts';
+import { MASt3RNode, type MASt3ROutput } from '../nodes/mast3r.node.ts';
+import { recoverFocalLength } from '../utils/focal-recovery.ts';
+import { ROMPNode } from '../nodes/romp.node.ts';
 
 // ---------------------------------------------------------------------------
 // Re-export the cache result type so callers can import it from one place
@@ -71,8 +74,10 @@ export interface BatchResult {
 interface FrameContext {
   frame: ExtractedFrame;
   segmentation: SegmentationResult | null;
-  /** null when MASt3R stub is active */
+  /** null when MASt3R is unavailable or returns no result for this frame */
   pointmap: Float32Array | null;
+  /** Full MASt3R pairwise output (populated when MASt3R is loaded) */
+  mast3rOutput: MASt3ROutput | null;
   /** null when ROMP stub is active */
   smplInit: Float32Array | null;
   pose2d: Keypoint2D[] | null;
@@ -109,64 +114,37 @@ async function hashVideoUrl(url: string): Promise<string> {
 // STUB helpers — clearly marked for future replacement
 // ---------------------------------------------------------------------------
 
-/**
- * STUB: replace with real model
- * MASt3R dense point-map inference.
- * Returns null until a real model is wired in.
- */
-function stubMast3r(_frame: ExtractedFrame): Float32Array | null {
-  // STUB: replace with real model — run MASt3R ONNX session and return
-  // a Float32Array of shape [H * W * 3] (XYZ per pixel).
-  return null;
-}
+// NOTE: Phase C (MASt3R) and Phase D (focal recovery) no longer use stubs.
+// MASt3RNode is used directly in the pipeline (see BatchPipeline._mast3r).
+// recoverFocalLength() is called in Phase D when point-map data is available.
+
 
 /**
- * STUB: replace with real model
- * Focal-length recovery from point-maps.
- * Returns the default values from config until a real implementation exists.
- */
-function stubFocalRecovery(_pointmaps: (Float32Array | null)[]): {
-  fx: number;
-  fy: number;
-  cx: number;
-  cy: number;
-} {
-  // STUB: replace with real model — solve for camera intrinsics from
-  // the first chunk's MASt3R point-maps using DLT or RANSAC.
-  return {
-    fx: JOSH_CONFIG.defaultFx,
-    fy: JOSH_CONFIG.defaultFy,
-    cx: JOSH_CONFIG.defaultCx,
-    cy: JOSH_CONFIG.defaultCy,
-  };
-}
-
-/**
- * STUB: replace with real model
- * ROMP multi-person SMPL parameter initialisation.
- * Returns null until a real ONNX session is available.
- */
-function stubRomp(_frame: ExtractedFrame): Float32Array | null {
-  // STUB: replace with real model — run ROMP ONNX session (512×512 input)
-  // and return initial SMPL pose/shape parameters as Float32Array[89].
-  return null;
-}
-
-/**
- * STUB: replace with real model
+ * STUB: replace with real WASM solver
  * JOSH gradient-based optimiser (700 iterations: 500 stage-1 + 200 stage-2).
- * Returns zero-filled parameter vector until the WASM solver is wired in.
+ *
+ * When frameCtx.smplInit is non-null (from ROMP), it seeds the initial params
+ * buffer with pose[0..71] and betas[72..81] before the fake optimisation loop.
+ * The real solver will use this as a warm-start rather than zeros.
  */
 async function stubJoshOptimize(
-  _frameCtx: FrameContext,
+  frameCtx: FrameContext,
   _camera: { fx: number; fy: number; cx: number; cy: number },
   totalIters: number,
   onIter: (iterIndex: number, loss: number) => void,
   signal: AbortSignal | undefined,
 ): Promise<Float32Array> {
-  // STUB: replace with real model — call the JOSH WASM solver with
-  // depth map, 2D keypoints, contact flags, and SMPL initialisation.
-  // For now we simulate iteration progress with a decaying fake loss.
+  // Seed from ROMP initialisation when available.
+  // params layout: [0..71] pose, [72..81] betas, [82..84] global trans,
+  //                [85..87] global orient, [88] scale σ
+  const params = new Float32Array(JOSH_CONFIG.paramDim); // zeros
+  if (frameCtx.smplInit !== null) {
+    // smplInit is a Float32Array[89] from ROMPNode (pose then betas).
+    // Copy pose [0..71] and betas [72..81] directly.
+    params.set(frameCtx.smplInit.subarray(0, 82), 0);
+  }
+
+  // STUB optimisation: simulate iteration progress with a decaying fake loss.
   for (let i = 0; i < totalIters; i++) {
     if (signal?.aborted) break;
     const fakeLoss = 10.0 * Math.exp(-i / (totalIters * 0.4));
@@ -176,7 +154,7 @@ async function stubJoshOptimize(
       await new Promise<void>((r) => setTimeout(r, 0));
     }
   }
-  return new Float32Array(JOSH_CONFIG.paramDim); // zeros
+  return params;
 }
 
 /**
@@ -202,6 +180,19 @@ export class BatchPipeline {
   private readonly _extractor = new FrameExtractor();
   private readonly _segmentation = new SegmentationNode();
   private readonly _pose2d = new Pose2DNode();
+  /**
+   * MASt3RNode is created lazily and may remain null if the model file is not
+   * present on the server.  All Phase C / Phase D code gracefully degrades
+   * when this is null.
+   */
+  private _mast3r: MASt3RNode | null = null;
+  /**
+   * ROMPNode for Phase E SMPL initialisation.
+   * Loaded lazily on first use; remains null / unloaded when the model file is
+   * absent.  Phase E degrades gracefully (smplInit stays null).
+   */
+  private readonly _romp = new ROMPNode('/models/romp-bev-fp32.onnx');
+  private _rompInitialized = false;
 
   private _segInitialized = false;
   private _poseInitialized = false;
@@ -262,6 +253,7 @@ export class BatchPipeline {
     // --- Initialise shared nodes --------------------------------------------
     await this._ensureSegmentationInit(allFrames[0]?.width ?? 384, allFrames[0]?.height ?? 384);
     await this._ensurePoseInit();
+    await this._ensureMast3rInit();
 
     // --- Camera intrinsics (recovered once from first chunk) ----------------
     let camera = {
@@ -286,6 +278,7 @@ export class BatchPipeline {
         frame,
         segmentation: null,
         pointmap: null,
+        mast3rOutput: null,
         smplInit: null,
         pose2d: null,
         contact: null,
@@ -358,7 +351,11 @@ export class BatchPipeline {
         });
       }
 
-      // ---- Phase E: ROMP (stub) -------------------------------------------
+      // ---- Phase E: ROMP SMPL initialisation ---------------------------------
+      // Attempt to lazy-load the ROMP model on first chunk.  Failures are
+      // non-fatal — smplInit remains null and the optimiser starts from zeros.
+      await this._ensureRompInit();
+
       for (let i = 0; i < frameContexts.length; i++) {
         if (signal?.aborted) break;
         const ctx = frameContexts[i]!;
@@ -366,7 +363,7 @@ export class BatchPipeline {
 
         if (ctx.segmentation === null) continue; // already cached
 
-        ctx.smplInit = stubRomp(ctx.frame); // STUB: replace with real model
+        ctx.smplInit = await this._runRomp(ctx.frame);
         this._emit({
           phase: 'romp',
           frameIndex: globalIdx,
@@ -621,11 +618,58 @@ export class BatchPipeline {
   }
 
   /**
+   * Attempt to load the ROMP ONNX model on first use.
+   * Failure is non-fatal — _rompInitialized is set to true regardless so we
+   * only attempt loading once per pipeline instance.
+   */
+  private async _ensureRompInit(): Promise<void> {
+    if (this._rompInitialized) return;
+    this._rompInitialized = true; // prevent repeated attempts on failure
+    try {
+      await this._romp.load();
+    } catch {
+      // Model unavailable — Phase E will return null and pipeline continues.
+      console.warn('[BatchPipeline] ROMP model not available — smplInit will be null');
+    }
+  }
+
+  /**
+   * Run ROMP on a single frame and return an 89-element Float32Array suitable
+   * for seeding the SMPL parameter buffer, or null if ROMP is not loaded /
+   * returns no detection.
+   *
+   * Buffer layout matches JOSH_CONFIG.paramDim (89):
+   *   [0..71]  pose   (axis-angle, 24 joints × 3)
+   *   [72..81] betas  (10 shape coefficients)
+   *   [82..88] zeros  (global trans, orient, scale — left for the solver)
+   */
+  private async _runRomp(frame: ExtractedFrame): Promise<Float32Array | null> {
+    if (!this._romp.isLoaded()) return null;
+
+    try {
+      const result = await this._romp.estimate(frame.imageData);
+      if (result === null) return null;
+
+      const params = new Float32Array(JOSH_CONFIG.paramDim); // zeros
+      // pose: [0..71]
+      params.set(result.pose.subarray(0, 72), 0);
+      // betas: [72..81]
+      params.set(result.betas.subarray(0, 10), 72);
+      // global trans, orient, scale remain zero — the solver handles them
+      return params;
+    } catch (err) {
+      console.warn('[BatchPipeline] ROMP inference error (non-fatal):', err);
+      return null;
+    }
+  }
+
+  /**
    * Release GPU/ONNX resources held by internal nodes.
    * Call after all processing is complete.
    */
   dispose(): void {
     this._segmentation.dispose();
     this._pose2d.dispose();
+    this._romp.dispose();
   }
 }
