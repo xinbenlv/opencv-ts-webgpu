@@ -2,6 +2,8 @@
 
 > Can you rebuild a modern computer vision framework entirely in TypeScript — no C++, no Python — running on WebGPU and WASM?
 
+![image](https://github.com/user-attachments/assets/382ef2f4-457f-40de-b459-13ca580cbeeb)
+
 This repo is our answer. OpenCV.ts is a proof-of-concept CV framework that runs entirely in the browser, using WebGPU for GPU kernels, WASM for CPU algorithms, and TypeScript throughout.
 
 **[v1.0.0 Release](https://github.com/xinbenlv/opencv-ts-webgpu/releases/tag/v1.0.0)**
