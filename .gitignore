@@ -16,4 +16,5 @@ demo/public/
 # SMPL model files — license requires individual download from smpl.is.tue.mpg.de
 demo/smpl/*.pkl
 demo/smpl/*.npz
+demo/smpl/*.bin
 public/models/*.onnx

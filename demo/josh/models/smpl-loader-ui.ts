@@ -34,6 +34,63 @@ export interface SMPLLoaderOptions {
 }
 
 // ---------------------------------------------------------------------------
+// .smpl.bin fast binary parser
+// Format: magic "SMPL" + uint32 version + uint32 numArrays + [arrays...]
+// Each array: uint32 nameLen + utf8 name + uint8 dtype(0=f32,1=i32,2=u32)
+//             + uint32 rank + uint32[rank] shape + raw data bytes
+// ---------------------------------------------------------------------------
+
+function parseSMPLBin(buf: ArrayBuffer): SMPLModelData {
+  const view = new DataView(buf);
+  let pos = 0;
+
+  const magic = String.fromCharCode(
+    view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+  if (magic !== 'SMPL') throw new Error('Not a .smpl.bin file');
+  pos = 4;
+  const version = view.getUint32(pos, true); pos += 4;
+  if (version !== 1) throw new Error(`Unsupported .smpl.bin version ${version}`);
+  const numArrays = view.getUint32(pos, true); pos += 4;
+
+  const arrays: Record<string, Float32Array | Int32Array | Uint32Array> = {};
+  const dec = new TextDecoder();
+
+  for (let i = 0; i < numArrays; i++) {
+    const nameLen = view.getUint32(pos, true); pos += 4;
+    const name = dec.decode(new Uint8Array(buf, pos, nameLen)); pos += nameLen;
+    const dtype = view.getUint8(pos); pos += 1;
+    const rank = view.getUint32(pos, true); pos += 4;
+    let size = 1;
+    for (let r = 0; r < rank; r++) {
+      size *= view.getUint32(pos, true); pos += 4;
+    }
+    const byteLen = size * (dtype === 1 ? 4 : dtype === 2 ? 4 : 4);
+    // Use slice to get aligned buffer for typed array construction
+    const slice = buf.slice(pos, pos + byteLen);
+    arrays[name] = dtype === 1
+      ? new Int32Array(slice)
+      : dtype === 2
+        ? new Uint32Array(slice)
+        : new Float32Array(slice);
+    pos += byteLen;
+  }
+
+  function req<T>(k: string): T {
+    if (!(k in arrays)) throw new Error(`Missing SMPL array: ${k}`);
+    return arrays[k] as unknown as T;
+  }
+  return {
+    vertices:      req<Float32Array>('v_template'),
+    faces:         req<Uint32Array>('f'),
+    shapedirs:     req<Float32Array>('shapedirs'),
+    posedirs:      req<Float32Array>('posedirs'),
+    J_regressor:   req<Float32Array>('J_regressor'),
+    kintree_table: req<Int32Array>('kintree_table'),
+    weights:       req<Float32Array>('weights'),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // IndexedDB persistence helpers
 // ---------------------------------------------------------------------------
 
@@ -728,15 +785,14 @@ export class SMPLLoaderUI {
       // IndexedDB unavailable (SSR / private mode) — silently ignore
     }
 
-    // Try auto-loading from well-known local path served by dev server
-    const LOCAL_PATH = '/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl';
+    // Try auto-loading from pre-converted binary (fast, no pkl parsing needed)
+    const BIN_PATH = '/smpl/smpl-neutral.smpl.bin';
     try {
-      const resp = await fetch(LOCAL_PATH, { method: 'HEAD' });
+      const resp = await fetch(BIN_PATH, { method: 'HEAD' });
       if (resp.ok && !this.aborted) {
-        this.renderLoading('Loading SMPL model from local file…');
-        const data = await fetch(LOCAL_PATH);
-        const buf = await data.arrayBuffer();
-        const smpl = extractSMPLData(new PickleParser(new Uint8Array(buf)).parse());
+        this.renderLoading('Loading SMPL model…');
+        const buf = await (await fetch(BIN_PATH)).arrayBuffer();
+        const smpl = parseSMPLBin(buf);
         if (!this.aborted) {
           this.model = smpl;
           this.renderLoaded(smpl, false);
@@ -745,8 +801,9 @@ export class SMPLLoaderUI {
           return;
         }
       }
-    } catch {
-      // File not present or parse error — fall through to drag-drop UI
+    } catch (e) {
+      console.warn('[SMPLLoaderUI] auto-load failed:', e);
+      // Fall through to drag-drop UI
     }
 
     if (!this.aborted) this.renderEmpty();
