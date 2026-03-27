@@ -372,10 +372,14 @@ async function main() {
         positions.push([TPOSE[j]![0] * w, TPOSE[j]![1] * h]);
       }
     } else if (haveCamera) {
-      // Weak-perspective projection: place skeleton on the detected person
+      // Weak-perspective projection: place skeleton on the detected person.
+      // FK joint positions are in absolute SMPL world space (pelvis ≈ Y=0.9 m),
+      // so subtract the FK pelvis before scaling so the projection is pelvis-relative.
+      const pelvisXWorld = joints[0]!;
+      const pelvisYWorld = joints[1]!;
       for (let j = 0; j < 24; j++) {
-        const Jx = joints[j * 3]!;
-        const Jy = joints[j * 3 + 1]!;
+        const Jx = joints[j * 3]! - pelvisXWorld;
+        const Jy = joints[j * 3 + 1]! - pelvisYWorld;
         const px = (camScale * Jx + camTx) * (w / 2) + w / 2;
         const py = (-camScale * Jy + camTy) * (h / 2) + h / 2;
         positions.push([px, py]);

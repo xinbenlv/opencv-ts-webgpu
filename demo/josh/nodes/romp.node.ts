@@ -407,7 +407,9 @@ export function estimateCamera(
   // Avoid division by zero with a sensible default scale
   cam[0] = hipWidthNorm > 0.01 ? 0.2 / hipWidthNorm : 1.0;
   cam[1] = (pelvis[0] - 0.5) * 2;
-  cam[2] = (pelvis[1] - 0.5) * 2;
+  // pelvis[1] is already Y-flipped by lmPos (world-up). The renderer negates Y
+  // again in the projection formula, so we must negate here to avoid double-flip.
+  cam[2] = (0.5 - pelvis[1]) * 2;
 
   return cam;
 }
