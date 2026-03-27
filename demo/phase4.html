@@ -775,17 +775,88 @@
     reader.readAsArrayBuffer(file);
   }
 
-  // Init: try IndexedDB
-  idbLoad().then(function(cached) {
-    var container = $id('smpl-loader-container');
-    if (cached && cached.vertices instanceof Float32Array) {
-      smplModel = cached; smplFromCache = true;
-      renderSMPLLoaded(container, cached, true);
-      syncOfflineSmplStatus();
-    } else {
-      renderSMPLEmpty(container);
+  // Parse .smpl.bin fast binary format
+  function parseSMPLBin(buf) {
+    var view = new DataView(buf), pos = 0;
+    var magic = String.fromCharCode(view.getUint8(0),view.getUint8(1),view.getUint8(2),view.getUint8(3));
+    if (magic !== 'SMPL') throw new Error('Not a .smpl.bin file');
+    pos = 4;
+    view.getUint32(pos, true); pos += 4; // version
+    var numArrays = view.getUint32(pos, true); pos += 4;
+    var arrays = {};
+    var dec = new TextDecoder();
+    for (var i = 0; i < numArrays; i++) {
+      var nameLen = view.getUint32(pos, true); pos += 4;
+      var name = dec.decode(new Uint8Array(buf, pos, nameLen)); pos += nameLen;
+      var dtype = view.getUint8(pos); pos += 1;
+      var rank = view.getUint32(pos, true); pos += 4;
+      var size = 1;
+      for (var r = 0; r < rank; r++) { size *= view.getUint32(pos, true); pos += 4; }
+      var byteLen = size * 4;
+      var slice = buf.slice(pos, pos + byteLen);
+      arrays[name] = dtype === 1 ? new Int32Array(slice) : dtype === 2 ? new Uint32Array(slice) : new Float32Array(slice);
+      pos += byteLen;
     }
-  });
+    return {
+      vertices:      arrays['v_template'],
+      faces:         arrays['f'],
+      shapedirs:     arrays['shapedirs'],
+      posedirs:      arrays['posedirs'],
+      J_regressor:   arrays['J_regressor'],
+      kintree_table: arrays['kintree_table'],
+      weights:       arrays['weights'],
+    };
+  }
+
+  function renderSMPLLoading(container, msg) {
+    container.innerHTML = '<div style="padding:20px;display:flex;align-items:center;gap:14px;">'
+      +'<div style="flex:1;max-width:200px;height:6px;background:#21262d;border-radius:3px;overflow:hidden;">'
+      +'<div style="height:100%;width:60%;background:#58a6ff;border-radius:3px;animation:smplp 1.2s ease-in-out infinite;"></div></div>'
+      +'<span style="font-size:13px;color:#8b949e;">'+msg+'</span></div>'
+      +'<style>@keyframes smplp{0%,100%{transform:translateX(-100%)}50%{transform:translateX(200%)}}</style>';
+  }
+
+  // Init: show loading immediately, try IDB, then auto-load from binary
+  (function() {
+    var container = $id('smpl-loader-container');
+    renderSMPLLoading(container, 'Checking for SMPL model\u2026');
+
+    idbLoad().then(function(cached) {
+      if (cached && cached.vertices instanceof Float32Array) {
+        smplModel = cached; smplFromCache = true;
+        renderSMPLLoaded(container, cached, true);
+        syncOfflineSmplStatus();
+        return;
+      }
+      // Auto-load from pre-converted binary
+      var BIN = '/smpl/smpl-neutral.smpl.bin';
+      renderSMPLLoading(container, 'Loading SMPL model (41 MB)\u2026');
+      fetch(BIN).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.arrayBuffer();
+      }).then(function(buf) {
+        renderSMPLLoading(container, 'Parsing SMPL arrays\u2026');
+        return new Promise(function(resolve, reject) {
+          setTimeout(function() {
+            try { resolve(parseSMPLBin(buf)); }
+            catch(e) { reject(e); }
+          }, 0);
+        });
+      }).then(function(data) {
+        smplModel = data; smplFromCache = false;
+        renderSMPLLoaded(container, data, false);
+        syncOfflineSmplStatus();
+        idbSave(data).catch(function(){});
+      }).catch(function(err) {
+        console.error('[phase4] auto-load failed:', err);
+        container.innerHTML = '<div style="padding:12px 16px;background:#21262d;border-radius:8px;color:#f85149;font-size:13px;margin-bottom:10px;">'
+          +'Auto-load failed: '+err.message+' &mdash; <button onclick="renderSMPLEmpty($id(\'smpl-loader-container\'))" style="background:none;border:none;color:#58a6ff;cursor:pointer;text-decoration:underline;">upload manually</button></div>';
+        renderSMPLEmpty(container);
+      });
+    }).catch(function() {
+      renderSMPLEmpty(container);
+    });
+  }());
 
   // ==========================================================================
   // Offline pipeline (Tab 2)
