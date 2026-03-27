@@ -37,23 +37,15 @@ export function createSMPLParams(init?: Partial<{
 }>): SMPLParams {
   const pose = tf.variable(
     tf.tensor1d(init?.pose ?? new Float32Array(72), 'float32'),
-    true,
-    'smpl_pose',
   );
   const betas = tf.variable(
     tf.tensor1d(init?.betas ?? new Float32Array(10), 'float32'),
-    true,
-    'smpl_betas',
   );
   const transl = tf.variable(
     tf.tensor1d(init?.transl ?? new Float32Array(3), 'float32'),
-    true,
-    'smpl_transl',
   );
   const scale = tf.variable(
     tf.tensor1d(init?.scale != null ? [init.scale] : [1.0], 'float32'),
-    true,
-    'smpl_scale',
   );
   return { pose, betas, transl, scale };
 }
@@ -231,31 +223,14 @@ export function smplForward(
     const ones = tf.ones([nV, 1], 'float32') as tf.Tensor2D;
     const vHomo = tf.concat([vPosed, ones], 1).reshape([nV, 4, 1]) as tf.Tensor3D;
 
-    // Skinned = blendedT @ vHomo → [6890,4,1] → [6890,3]
-    const vSkinnedHomo = tf.matMul(
-      blendedT.reshape([nV * 4, 4]) as tf.Tensor2D,
-      tf.tile(vHomo.reshape([nV, 4]), [1, 1]).reshape([nV * 4, 1]) as tf.Tensor2D,
-    );
-    // Actually do it properly with batch matmul workaround:
-    // blendedT [nV,4,4], vHomo [nV,4,1]
-    // tf.js doesn't have batchMatMul with shape [nV,4,4]x[nV,4,1] directly,
-    // so we use: (blendedT.reshape[nV,4,4]) × (vHomo[nV,4,1])
-    // Use einsum equivalent: sum over j: blendedT[v,i,j] * vHomo[v,j,0]
-    // = matMul(blendedFlat[nV,16], ...) — easier to slice per component
+    // Skinned vertices via row-wise dot products (avoids unsupported batchMatMul):
+    // Result[v,i] = sum_j blendedT[v,i,j] * vH[v,j]
     const bT = blendedT;                                              // [nV,4,4]
     const vH = tf.concat([vPosed, ones], 1) as tf.Tensor2D;          // [nV,4]
 
-    // Result[v,i] = sum_j bT[v,i,j] * vH[v,j]
-    // = einsum('vij,vj->vi', bT, vH)
-    // Use: reshape bT to [nV,4,4], vH to [nV,4,1], batch matmul
-    const vHcol = vH.reshape([nV, 4, 1]) as tf.Tensor3D;
-    // Flatten batch dimension for matmul: [nV*4, 4] x [nV*4, 1]
-    // Better: for each of the 4 rows, multiply
     const rowResults: tf.Tensor2D[] = [];
     for (let row = 0; row < 4; row++) {
-      // bT[:,row,:] shape [nV,4]
       const rowSlice = tf.slice(bT, [0, row, 0], [nV, 1, 4]).squeeze([1]) as tf.Tensor2D;
-      // sum_j rowSlice[v,j] * vH[v,j]
       const dot = tf.sum(tf.mul(rowSlice, vH), 1, true) as tf.Tensor2D; // [nV,1]
       rowResults.push(dot);
     }
@@ -281,9 +256,6 @@ export function smplForward(
       jointPos.push(col3);
     }
     const joints = tf.stack(jointPos) as tf.Tensor2D;                // [24,3]
-
-    // Dispose intermediate tensors that won't be returned via tf.tidy cleanup
-    void vSkinnedHomo; // computed but replaced by manual row loop
 
     return { vertices, joints };
   });

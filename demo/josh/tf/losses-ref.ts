@@ -213,7 +213,6 @@ function computeLc2(
     const nV = vertices.shape[0];
     const maskArr = new Float32Array(nV);
     for (let i = 0; i < nV; i++) maskArr[i] = contactMask[i] ?? 0;
-    const mask = tf.tensor2d(maskArr.map(v => [v, v, v]), [nV, 3], 'float32');
     const mask1d = tf.tensor1d(maskArr, 'float32');
 
     const diff = tf.sub(vertices, prevVertices) as tf.Tensor2D;
@@ -223,7 +222,6 @@ function computeLc2(
     const hinge = tf.relu(tf.sub(dist2, threshold)) as tf.Tensor1D;
     const masked = tf.mul(mask1d, hinge) as tf.Tensor1D;
 
-    void mask; // not needed, suppress lint
     return tf.sum(masked) as tf.Scalar;
   });
 }
