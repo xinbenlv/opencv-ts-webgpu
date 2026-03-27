@@ -1,0 +1,1 @@
+import{M as a}from"./register_all_kernels-BMrHvhlT.js";import{s as p}from"./shared-C1zR-UWu.js";import"./index-Dq_Lnxi8.js";/** @license See the LICENSE file. */const r="4.22.0";export{a as MathBackendCPU,p as shared,r as version_cpu};
