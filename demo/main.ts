@@ -3,6 +3,8 @@ import { BufferManager } from '../src/core/buffer-manager.ts';
 import { ResourceTracker } from '../src/core/resource-tracker.ts';
 import type { NodeContext } from '../src/graph/node.ts';
 import { PROC_W, PROC_H, type DisplayPx, fitToAnchor } from '../src/core/dimensions.ts';
+import { SmplRenderer } from './josh/rendering/smpl-renderer.ts';
+import { buildSyntheticSmplModel } from './josh/models/smpl-synthetic.ts';
 
 /**
  * OpenCV.ts 5.0 — JOSH Live Demo Entry Point
@@ -241,7 +243,35 @@ async function main() {
 
   const depthCtx = depthCanvas.getContext('2d')!;
   const meshCtx = meshCanvas.getContext('2d')!;
-  const outputCtx = outputCanvas.getContext('2d')!;
+
+  // Node C: SmplRenderer — 3D WebGPU mesh viewer (replaces flat depth passthrough)
+  function computeVertexNormals(vertices: Float32Array, faces: Uint32Array): Float32Array {
+    const normals = new Float32Array(vertices.length);
+    const faceCount = faces.length / 3;
+    for (let f = 0; f < faceCount; f++) {
+      const i0 = faces[f * 3]!, i1 = faces[f * 3 + 1]!, i2 = faces[f * 3 + 2]!;
+      const ax = vertices[i1*3]!-vertices[i0*3]!, ay = vertices[i1*3+1]!-vertices[i0*3+1]!, az = vertices[i1*3+2]!-vertices[i0*3+2]!;
+      const bx = vertices[i2*3]!-vertices[i0*3]!, by = vertices[i2*3+1]!-vertices[i0*3+1]!, bz = vertices[i2*3+2]!-vertices[i0*3+2]!;
+      const nx = ay*bz - az*by, ny = az*bx - ax*bz, nz = ax*by - ay*bx;
+      for (const vi of [i0, i1, i2]) {
+        normals[vi*3] = (normals[vi*3] ?? 0) + nx;
+        normals[vi*3+1] = (normals[vi*3+1] ?? 0) + ny;
+        normals[vi*3+2] = (normals[vi*3+2] ?? 0) + nz;
+      }
+    }
+    for (let v = 0; v < vertices.length / 3; v++) {
+      const x = normals[v*3]!, y = normals[v*3+1]!, z = normals[v*3+2]!;
+      const len = Math.sqrt(x*x + y*y + z*z);
+      if (len > 0.0001) {
+        normals[v*3] = x / len; normals[v*3+1] = y / len; normals[v*3+2] = z / len;
+      } else { normals[v*3+1] = 1; }
+    }
+    return normals;
+  }
+  const smplModelData = buildSyntheticSmplModel();
+  const smplNormals = computeVertexNormals(smplModelData.meanTemplate, smplModelData.faces);
+  const smplRenderer = new SmplRenderer(device, outputCanvas);
+  smplRenderer.setMesh(smplModelData.meanTemplate, smplNormals, smplModelData.faces);
 
   // SMPL skeleton definition (24 joints, parent indices)
   const SMPL_PARENTS = [-1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19,20,21];
@@ -529,9 +559,17 @@ async function main() {
           console.log(`[Joints] frame=${frameCount} pelvis=[${j0.map(v => v?.toFixed(3))}] head=[${j15.map(v => v?.toFixed(3))}]`);
         }
 
-        // Node C: solver optimized depth output
-        const solverBuf = await pipeline.readOutput(solverNodeId, 'optimizedDepth');
-        renderDepthToCanvas(new Float32Array(solverBuf), outputCtx, displayW as number, displayH as number);
+        // Node C: render refined SMPL mesh via SmplRenderer
+        const vertBuf = await pipeline.readOutput(solverNodeId, 'refinedVertices');
+        smplRenderer.updateVertices(new Float32Array(vertBuf));
+        smplRenderer.render({
+          eye: [0, 0.9, 3.5],
+          target: [0, 0.9, 0],
+          up: [0, 1, 0],
+          fovY: Math.PI / 4,
+          near: 0.1,
+          far: 10.0,
+        });
       }
     } catch (e) {
       console.error('Frame execution error:', e);
