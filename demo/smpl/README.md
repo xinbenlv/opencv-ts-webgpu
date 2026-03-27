@@ -26,7 +26,7 @@ cp smpl/models/basicModel_neutral_lbs_10_207_0_v1.0.0.pkl demo/smpl/
 
 ```
 demo/smpl/
-  basicModel_neutral_lbs_10_207_0_v1.0.0.pkl   (~50 MB)
+  basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl   (~236 MB)
 ```
 
 ## Usage in JOSH pipeline
