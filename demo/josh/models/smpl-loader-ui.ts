@@ -727,7 +727,34 @@ export class SMPLLoaderUI {
     } catch {
       // IndexedDB unavailable (SSR / private mode) — silently ignore
     }
+
+    // Try auto-loading from well-known local path served by dev server
+    const LOCAL_PATH = '/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl';
+    try {
+      const resp = await fetch(LOCAL_PATH, { method: 'HEAD' });
+      if (resp.ok && !this.aborted) {
+        this.renderLoading('Loading SMPL model from local file…');
+        const data = await fetch(LOCAL_PATH);
+        const buf = await data.arrayBuffer();
+        const smpl = extractSMPLData(new PickleParser(new Uint8Array(buf)).parse());
+        if (!this.aborted) {
+          this.model = smpl;
+          this.renderLoaded(smpl, false);
+          this.opts.onLoad?.(smpl);
+          await idbSave(smpl).catch(() => {});
+          return;
+        }
+      }
+    } catch {
+      // File not present or parse error — fall through to drag-drop UI
+    }
+
     if (!this.aborted) this.renderEmpty();
+  }
+
+  private renderLoading(msg: string) {
+    const c = this.opts.container;
+    c.innerHTML = `<div style="padding:24px;color:#8b949e;font-size:13px;">${msg}</div>`;
   }
 
   // ── DOM helpers ───────────────────────────────────────────────────────────

@@ -40,7 +40,7 @@ function ortWorkerPlugin(): Plugin {
         const url = req.url;
 
         // Add long-lived cache headers for model files (.onnx, .wasm, .bin)
-        if (/\.(onnx|wasm|bin)(\?|$)/.test(url)) {
+        if (/\.(onnx|wasm|bin|pkl)(\?|$)/.test(url)) {
           res.setHeader('Cache-Control', 'public, max-age=604800, immutable'); // 7 days
         }
 
