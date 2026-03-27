@@ -40,6 +40,8 @@ interface OfflineUIElements {
 let smplLoader: SMPLLoaderUI | null = null;
 let smplModel: SMPLModelData | null = null;
 let videoFile: File | null = null;
+/** Direct URL to use instead of a dropped file (e.g. sample video). */
+let sampleVideoUrl: string | null = './assets/josh-demo.mp4';
 let isProcessing = false;
 
 // Loss history for the curve canvas
@@ -50,7 +52,8 @@ const lossHistory: number[] = [];
 // ---------------------------------------------------------------------------
 
 function updateProcessButton(btn: HTMLButtonElement) {
-  const ready = smplModel !== null && videoFile !== null && !isProcessing;
+  const hasVideo = videoFile !== null || sampleVideoUrl !== null;
+  const ready = smplModel !== null && hasVideo && !isProcessing;
   btn.disabled = !ready;
   btn.style.opacity = ready ? '1' : '0.4';
   btn.style.cursor = ready ? 'pointer' : 'not-allowed';
@@ -141,7 +144,7 @@ function setupVideoDropZone(
 let _abortController: AbortController | null = null;
 
 async function runOfflinePipeline(els: OfflineUIElements) {
-  if (!smplModel || !videoFile) return;
+  if (!smplModel || (!videoFile && !sampleVideoUrl)) return;
   isProcessing = true;
   lossHistory.length = 0;
   _abortController = new AbortController();
@@ -164,8 +167,9 @@ async function runOfflinePipeline(els: OfflineUIElements) {
     return;
   }
 
-  // Create object URL from the File so BatchPipeline can fetch it
-  const videoUrl = URL.createObjectURL(videoFile);
+  // Use dropped file or the sample video
+  const isBlobUrl = videoFile !== null;
+  const videoUrl = isBlobUrl ? URL.createObjectURL(videoFile!) : sampleVideoUrl!;
 
   function onProgress(p: BatchProgress) {
     const frac = p.totalFrames > 0 ? p.frameIndex / p.totalFrames : 0;
@@ -216,7 +220,7 @@ async function runOfflinePipeline(els: OfflineUIElements) {
       els.frameCounter.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
     }
   } finally {
-    URL.revokeObjectURL(videoUrl);
+    if (isBlobUrl) URL.revokeObjectURL(videoUrl);
     isProcessing = false;
     updateProcessButton(els.processBtn);
   }
@@ -253,15 +257,27 @@ export function mountOfflineUI(container: HTMLElement) {
             Input Video
           </div>
           <div id="offline-video-zone" style="
-            border:2px dashed #333;border-radius:8px;padding:28px 20px;
-            text-align:center;cursor:pointer;background:#0d0d14;
+            border:2px dashed #2a5a2a;border-radius:8px;padding:20px;
+            text-align:center;cursor:pointer;background:#0d140d;
             transition:border-color 0.2s,background 0.2s;
           ">
-            <div style="font-size:2rem;opacity:0.5;margin-bottom:6px;">&#127910;</div>
-            <div style="font-size:0.85rem;color:#c0d0e0;">Drop video file here or click to browse</div>
-            <div id="offline-video-label" style="font-size:0.75rem;color:#405060;margin-top:6px;">
-              Supported: .mp4, .webm, .mov
+            <div style="font-size:1.4rem;opacity:0.7;margin-bottom:4px;">&#127910;</div>
+            <div id="offline-video-label" style="font-size:0.85rem;color:#4ade80;margin-bottom:8px;">
+              ✔ Sample: josh-demo.mp4 (6.6 MB)
             </div>
+            <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+              <button id="offline-video-use-sample" style="
+                padding:4px 12px;background:#1a3a1a;color:#4ade80;border:1px solid #2a5a2a;
+                border-radius:4px;font-size:0.75rem;cursor:pointer;">
+                Use sample video
+              </button>
+              <button id="offline-video-browse" style="
+                padding:4px 12px;background:#1a1a2a;color:#7ab8e0;border:1px solid #2a3a5a;
+                border-radius:4px;font-size:0.75rem;cursor:pointer;">
+                Browse your file…
+              </button>
+            </div>
+            <div style="font-size:0.7rem;color:#405060;margin-top:6px;">or drag &amp; drop .mp4 / .webm / .mov</div>
             <input type="file" id="offline-video-input" accept="video/*" style="display:none" />
           </div>
         </div>
@@ -383,12 +399,49 @@ export function mountOfflineUI(container: HTMLElement) {
     },
   });
 
-  // Video drop zone
-  setupVideoDropZone(videoZone, videoInput, processBtn, videoLabel);
+  // Video drop zone (drag + file input)
+  const useSampleBtn = container.querySelector('#offline-video-use-sample') as HTMLButtonElement;
+  const browseBtn = container.querySelector('#offline-video-browse') as HTMLButtonElement;
+
+  function selectSample() {
+    videoFile = null;
+    sampleVideoUrl = './assets/josh-demo.mp4';
+    videoLabel.textContent = '✔ Sample: josh-demo.mp4 (6.6 MB)';
+    videoLabel.style.color = '#4ade80';
+    videoZone.style.borderColor = '#2a5a2a';
+    videoZone.style.background = '#0d140d';
+    updateProcessButton(processBtn);
+  }
+
+  function selectFile(file: File) {
+    videoFile = file;
+    sampleVideoUrl = null;
+    videoLabel.textContent = `✔ ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+    videoLabel.style.color = '#4ade80';
+    videoZone.style.borderColor = '#2a5a2a';
+    videoZone.style.background = '#0d140d';
+    updateProcessButton(processBtn);
+  }
+
+  useSampleBtn.addEventListener('click', (e) => { e.stopPropagation(); selectSample(); });
+  browseBtn.addEventListener('click', (e) => { e.stopPropagation(); videoInput.click(); });
+  videoInput.addEventListener('change', () => { if (videoInput.files?.[0]) selectFile(videoInput.files[0]); });
+  videoZone.addEventListener('dragover', (e) => { e.preventDefault(); videoZone.style.borderColor = '#4a9fc2'; });
+  videoZone.addEventListener('dragleave', () => { videoZone.style.borderColor = videoFile || sampleVideoUrl ? '#2a5a2a' : '#333'; });
+  videoZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer?.files[0];
+    if (file && (file.type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(file.name))) {
+      selectFile(file);
+    }
+  });
+
+  // Sample pre-selected by default — button is already enabled when SMPL loads
+  updateProcessButton(processBtn);
 
   // Process button
   processBtn.addEventListener('click', () => {
-    if (!isProcessing && smplModel && videoFile) {
+    if (!isProcessing && smplModel && (videoFile || sampleVideoUrl)) {
       runOfflinePipeline(els);
     }
   });
