@@ -1,7 +1,15 @@
 import { defineConfig, type Plugin } from 'vite';
 import { resolve } from 'node:path';
 import { copyFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import basicSsl from '@vitejs/plugin-basic-ssl';
+import pkg from './package.json' with { type: 'json' };
+
+const COMMIT = (() => {
+  try { return execSync('git rev-parse --short=6 HEAD').toString().trim(); }
+  catch { return 'unknown'; }
+})();
+const VERSION = pkg.version;
 
 // Copy ORT WASM binary to demo/assets/ort/
 function copyOrtWasmFiles() {
@@ -66,8 +74,28 @@ function ortWorkerPlugin(): Plugin {
   };
 }
 
+/** Injects a fixed version/commit badge into every HTML page. */
+function versionBadgePlugin(): Plugin {
+  const badge = `
+<style>
+#vbadge{position:fixed;bottom:8px;right:10px;z-index:9999;
+  background:rgba(13,17,23,0.85);border:1px solid #30363d;border-radius:6px;
+  padding:3px 8px;font:11px/1.6 monospace;color:#8b949e;
+  backdrop-filter:blur(4px);pointer-events:none;user-select:none;}
+#vbadge span{color:#58a6ff;}
+</style>
+<div id="vbadge">v<span>${VERSION}</span> · <span>${COMMIT}</span></div>`;
+
+  return {
+    name: 'version-badge',
+    transformIndexHtml(html) {
+      return html.replace('</body>', `${badge}\n</body>`);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [basicSsl(), ortWorkerPlugin()],
+  plugins: [basicSsl(), ortWorkerPlugin(), versionBadgePlugin()],
 
   root: 'demo',
 
