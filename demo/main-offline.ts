@@ -265,11 +265,19 @@ export function mountOfflineUI(container: HTMLElement) {
             <div id="offline-video-label" style="font-size:0.85rem;color:#4ade80;margin-bottom:8px;">
               ✔ Sample: josh-demo.mp4 (6.6 MB)
             </div>
-            <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+
+            <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;align-items:center;">
+              <select id="offline-video-sample-select" style="
+                padding:4px 8px;background:#1a3a1a;color:#4ade80;border:1px solid #2a5a2a;
+                border-radius:4px;font-size:0.75rem;cursor:pointer;">
+                <option value="./assets/josh-demo.mp4">demo1 (6.6 MB)</option>
+                <option value="./assets/josh-demo2.mp4">demo2 (3.0 MB)</option>
+                <option value="./assets/josh-long-demo.mp4">long demo (7.6 MB)</option>
+              </select>
               <button id="offline-video-use-sample" style="
                 padding:4px 12px;background:#1a3a1a;color:#4ade80;border:1px solid #2a5a2a;
                 border-radius:4px;font-size:0.75rem;cursor:pointer;">
-                Use sample video
+                Use sample
               </button>
               <button id="offline-video-browse" style="
                 padding:4px 12px;background:#1a1a2a;color:#7ab8e0;border:1px solid #2a3a5a;
@@ -402,11 +410,18 @@ export function mountOfflineUI(container: HTMLElement) {
   // Video drop zone (drag + file input)
   const useSampleBtn = container.querySelector('#offline-video-use-sample') as HTMLButtonElement;
   const browseBtn = container.querySelector('#offline-video-browse') as HTMLButtonElement;
+  const sampleSelect = container.querySelector('#offline-video-sample-select') as HTMLSelectElement;
+
+  const sampleLabels: Record<string, string> = {
+    './assets/josh-demo.mp4': 'josh-demo.mp4 (6.6 MB)',
+    './assets/josh-demo2.mp4': 'josh-demo2.mp4 (3.0 MB)',
+    './assets/josh-long-demo.mp4': 'josh-long-demo.mp4 (7.6 MB)',
+  };
 
   function selectSample() {
     videoFile = null;
-    sampleVideoUrl = './assets/josh-demo.mp4';
-    videoLabel.textContent = '✔ Sample: josh-demo.mp4 (6.6 MB)';
+    sampleVideoUrl = sampleSelect.value;
+    videoLabel.textContent = `✔ Sample: ${sampleLabels[sampleVideoUrl] ?? sampleVideoUrl}`;
     videoLabel.style.color = '#4ade80';
     videoZone.style.borderColor = '#2a5a2a';
     videoZone.style.background = '#0d140d';
