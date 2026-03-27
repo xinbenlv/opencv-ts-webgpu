@@ -82,7 +82,7 @@ function computeL3D(
   cx: number,
   cy: number,
   imgW: number,
-  imgH: number,
+  _imgH: number,
 ): tf.Scalar {
   return tf.tidy(() => {
     const nV = vertices.shape[0];                                     // 6890

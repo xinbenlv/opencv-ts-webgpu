@@ -67,7 +67,7 @@ interface Button {
 export class Timeline {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly onFrameChange?: (frameIndex: number) => void;
+  private readonly onFrameChange: ((frameIndex: number) => void) | undefined;
 
   private frameCount = 0;
   private currentFrame = 0;
@@ -224,7 +224,7 @@ export class Timeline {
   // Drawing helpers
   // ---------------------------------------------------------------------------
 
-  private _drawButtons(W: number, H: number): void {
+  private _drawButtons(W: number, _H: number): void {
     const btnY = BTN_Y_OFFSET + BTN_SIZE / 2;
     const spacing = BTN_SIZE + 8;
     const groupW = spacing * 3 - 8;
@@ -334,7 +334,7 @@ export class Timeline {
     const lossRange = this.maxLoss - this.minLoss;
 
     for (let i = 0; i < this.frameCount; i++) {
-      const loss = this.losses[i];
+      const loss = this.losses[i]!;
       const segX = barX + i * frameW;
       const segW = Math.max(1, frameW - 0.5);
 
@@ -384,7 +384,7 @@ export class Timeline {
     ctx.fillText(frameText, PAD, H - 10);
 
     // Loss value (right)
-    const loss = this.frameCount > 0 ? this.losses[this.currentFrame] : NaN;
+    const loss = this.frameCount > 0 ? (this.losses[this.currentFrame] ?? NaN) : NaN;
     ctx.font = FONT_LABEL;
     ctx.fillStyle = '#7a8aa0';
     const lossText = isNaN(loss) ? 'Loss: —' : `Loss: ${loss.toFixed(4)}`;

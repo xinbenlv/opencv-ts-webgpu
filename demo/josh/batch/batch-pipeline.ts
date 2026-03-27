@@ -160,7 +160,6 @@ function interpolateParams(a: Float32Array, b: Float32Array, t: number): Float32
 // ---------------------------------------------------------------------------
 
 export class BatchPipeline {
-  private readonly _device: GPUDevice;
   private readonly _onProgress: ((p: BatchProgress) => void) | undefined;
 
   private readonly _extractor = new FrameExtractor();
@@ -180,8 +179,7 @@ export class BatchPipeline {
   private _segInitialized = false;
   private _poseInitialized = false;
 
-  constructor(device: GPUDevice, onProgress?: (p: BatchProgress) => void) {
-    this._device = device;
+  constructor(_device: GPUDevice, onProgress?: (p: BatchProgress) => void) {
     this._onProgress = onProgress;
   }
 
@@ -247,7 +245,7 @@ export class BatchPipeline {
     await this._ensureMast3rInit();
 
     // --- Camera intrinsics (recovered once from first chunk) ----------------
-    let camera = {
+    let camera: { fx: number; fy: number; cx: number; cy: number } = {
       fx: JOSH_CONFIG.defaultFx,
       fy: JOSH_CONFIG.defaultFy,
       cx: JOSH_CONFIG.defaultCx,
@@ -540,8 +538,8 @@ export class BatchPipeline {
 
           const result = await runJOSHOptimizer({
             smplModel: this._smplModel,
-            initPose: initPose ? new Float32Array(initPose) : undefined,
-            initBetas: initBetas ? new Float32Array(initBetas) : undefined,
+            ...(initPose ? { initPose: new Float32Array(initPose) } : {}),
+            ...(initBetas ? { initBetas: new Float32Array(initBetas) } : {}),
             pts3d: ctx.pointmap,
             keypoints2d: kp2d,
             depthMap: null,

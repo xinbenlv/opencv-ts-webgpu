@@ -154,7 +154,7 @@ function rodriguesDeriv(
   ): Mat3 {
     const out = new Array<number>(9) as unknown as Mat3;
     for (let i = 0; i < 9; i++) {
-      out[i] = cs * K[i] + s * dK[i] + cc * Ksq[i] + c * dKsq[i];
+      out[i] = cs * K[i]! + s * dK[i]! + cc * Ksq[i]! + c * dKsq[i]!;
     }
     return out;
   }
@@ -186,7 +186,7 @@ function numericalDeriv(
 
   const out = new Array<number>(9) as unknown as Mat3;
   for (let i = 0; i < 9; i++) {
-    out[i] = (rPlus[i] - rMinus[i]) / (2 * eps);
+    out[i] = (rPlus[i]! - rMinus[i]!) / (2 * eps);
   }
   return out;
 }
@@ -194,7 +194,7 @@ function numericalDeriv(
 function maxAbsDiff(a: Mat3, b: Mat3): number {
   let max = 0;
   for (let i = 0; i < 9; i++) {
-    max = Math.max(max, Math.abs(a[i] - b[i]));
+    max = Math.max(max, Math.abs(a[i]! - b[i]!));
   }
   return max;
 }

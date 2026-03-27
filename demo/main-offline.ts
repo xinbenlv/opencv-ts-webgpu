@@ -92,52 +92,6 @@ function drawLossCurve(canvas: HTMLCanvasElement, losses: number[]) {
 }
 
 // ---------------------------------------------------------------------------
-// Video drop zone setup
-// ---------------------------------------------------------------------------
-
-function setupVideoDropZone(
-  zone: HTMLElement,
-  input: HTMLInputElement,
-  processBtn: HTMLButtonElement,
-  labelEl: HTMLElement,
-) {
-  function onFile(file: File) {
-    videoFile = file;
-    labelEl.textContent = `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
-    labelEl.style.color = '#7ab8e0';
-    zone.style.borderColor = '#4a9fc2';
-    updateProcessButton(processBtn);
-  }
-
-  zone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    zone.style.borderColor = '#4a9fc2';
-    zone.style.background = '#0d1a24';
-  });
-  zone.addEventListener('dragleave', () => {
-    if (!videoFile) {
-      zone.style.borderColor = '#333';
-      zone.style.background = '#0d0d14';
-    }
-  });
-  zone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    const file = e.dataTransfer?.files[0];
-    if (file && (file.type.startsWith('video/') || file.name.endsWith('.mp4') || file.name.endsWith('.webm') || file.name.endsWith('.mov'))) {
-      onFile(file);
-    } else if (file) {
-      labelEl.textContent = 'Not a video file — try .mp4, .webm, .mov';
-      labelEl.style.color = '#f87171';
-    }
-  });
-  zone.addEventListener('click', () => input.click());
-  input.addEventListener('change', () => {
-    const file = input.files?.[0];
-    if (file) onFile(file);
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Real batch pipeline
 // ---------------------------------------------------------------------------
 

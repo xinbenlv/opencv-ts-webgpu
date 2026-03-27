@@ -53,15 +53,15 @@ export function recoverFocalLength(
   let num = 0;
   let den = 0;
   for (let i = 0; i < N; i++) {
-    const X = points3D[i * 3];
-    const Y = points3D[i * 3 + 1];
-    const Z = points3D[i * 3 + 2];
+    const X = points3D[i * 3]!;
+    const Y = points3D[i * 3 + 1]!;
+    const Z = points3D[i * 3 + 2]!;
     if (Z <= 0) continue; // behind camera – skip
 
     const aX = X / Z;
     const aY = Y / Z;
-    const bX = points2D[i * 2] - cx;
-    const bY = points2D[i * 2 + 1] - cy;
+    const bX = points2D[i * 2]! - cx;
+    const bY = points2D[i * 2 + 1]! - cy;
 
     num += aX * bX + aY * bY;
     den += aX * aX + aY * aY;
@@ -81,15 +81,15 @@ export function recoverFocalLength(
   let sse = 0;
   let count = 0;
   for (let i = 0; i < N; i++) {
-    const X = points3D[i * 3];
-    const Y = points3D[i * 3 + 1];
-    const Z = points3D[i * 3 + 2] + depthShift;
+    const X = points3D[i * 3]!;
+    const Y = points3D[i * 3 + 1]!;
+    const Z = points3D[i * 3 + 2]! + depthShift;
     if (Z <= 0) continue;
 
     const uProj = focalLength * (X / Z) + cx;
     const vProj = focalLength * (Y / Z) + cy;
-    const du = uProj - points2D[i * 2];
-    const dv = vProj - points2D[i * 2 + 1];
+    const du = uProj - points2D[i * 2]!;
+    const dv = vProj - points2D[i * 2 + 1]!;
     sse += du * du + dv * dv;
     count++;
   }
@@ -141,26 +141,21 @@ function recoverDepthShift(
 
     const N = points3D.length / 3;
     for (let i = 0; i < N; i++) {
-      const X = points3D[i * 3];
-      const Y = points3D[i * 3 + 1];
-      const Zraw = points3D[i * 3 + 2];
+      const X = points3D[i * 3]!;
+      const Y = points3D[i * 3 + 1]!;
+      const Zraw = points3D[i * 3 + 2]!;
       const Z = Zraw + delta;
       if (Z <= 0) continue;
 
       const Z2 = Z * Z;
-      const Z3 = Z2 * Z;
 
       // residuals
-      const rx = f * (X / Z) + cx - points2D[i * 2];
-      const ry = f * (Y / Z) + cy - points2D[i * 2 + 1];
+      const rx = f * (X / Z) + cx - points2D[i * 2]!;
+      const ry = f * (Y / Z) + cy - points2D[i * 2 + 1]!;
 
       // drx/dδ = -f*X/Z²
       const drxDd = -f * X / Z2;
       const dryDd = -f * Y / Z2;
-
-      // d²rx/dδ² = 2f*X/Z³
-      const d2rxDd2 = 2 * f * X / Z3;
-      const d2ryDd2 = 2 * f * Y / Z3;
 
       // dL/dδ = 2*(rx*drx/dδ + ry*dry/dδ)
       grad += rx * drxDd + ry * dryDd;

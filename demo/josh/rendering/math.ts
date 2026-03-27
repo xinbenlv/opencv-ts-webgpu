@@ -80,7 +80,7 @@ export function mat4Multiply(a: Float32Array, b: Float32Array): Float32Array {
     for (let row = 0; row < 4; row++) {
       let sum = 0;
       for (let k = 0; k < 4; k++) {
-        sum += a[k * 4 + row] * b[col * 4 + k];
+        sum += a[k * 4 + row]! * b[col * 4 + k]!;
       }
       out[col * 4 + row] = sum;
     }

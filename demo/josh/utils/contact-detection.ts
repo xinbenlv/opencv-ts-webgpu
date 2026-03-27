@@ -51,10 +51,10 @@ export function detectContacts(
   const contactVertexIndices: number[] = [];
 
   for (let ci = 0; ci < candidateVertexIndices.length; ci++) {
-    const vi = candidateVertexIndices[ci];
-    const X = vertices[vi * 3];
-    const Y = vertices[vi * 3 + 1];
-    const Z = vertices[vi * 3 + 2];
+    const vi = candidateVertexIndices[ci]!;
+    const X = vertices[vi * 3]!;
+    const Y = vertices[vi * 3 + 1]!;
+    const Z = vertices[vi * 3 + 2]!;
 
     // Vertex must be in front of the camera
     if (Z <= 0) {
@@ -112,10 +112,10 @@ function sampleDepthBilinear(
   const tx = u - x0;
   const ty = v - y0;
 
-  const d00 = depthMap[y0 * W + x0];
-  const d10 = depthMap[y0 * W + x1];
-  const d01 = depthMap[y1 * W + x0];
-  const d11 = depthMap[y1 * W + x1];
+  const d00 = depthMap[y0 * W + x0]!;
+  const d10 = depthMap[y0 * W + x1]!;
+  const d01 = depthMap[y1 * W + x0]!;
+  const d11 = depthMap[y1 * W + x1]!;
 
   // Bilinear interpolation
   return (1 - tx) * (1 - ty) * d00

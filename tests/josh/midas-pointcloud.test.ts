@@ -267,8 +267,8 @@ describe('unprojectDepth — focal length sensitivity', () => {
     const [pts3d_f250] = unprojectDepth(rawDepth, W, H, 250);
 
     // X_f250 should be approximately double X_f500
-    const X_500 = pts3d_f500[0];
-    const X_250 = pts3d_f250[0];
+    const X_500 = pts3d_f500[0]!;
+    const X_250 = pts3d_f250[0]!;
     expect(Math.abs(X_250)).toBeCloseTo(Math.abs(X_500) * 2, 4);
   });
 });

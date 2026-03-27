@@ -219,9 +219,8 @@ export function smplForward(
     const blendedFlat = tf.matMul(skinWeights, Gflat) as tf.Tensor2D; // [6890,16]
     const blendedT = blendedFlat.reshape([nV, 4, 4]) as tf.Tensor3D; // [6890,4,4]
 
-    // Homogeneous vertices [6890,4,1]
+    // Homogeneous vertices
     const ones = tf.ones([nV, 1], 'float32') as tf.Tensor2D;
-    const vHomo = tf.concat([vPosed, ones], 1).reshape([nV, 4, 1]) as tf.Tensor3D;
 
     // Skinned vertices via row-wise dot products (avoids unsupported batchMatMul):
     // Result[v,i] = sum_j blendedT[v,i,j] * vH[v,j]

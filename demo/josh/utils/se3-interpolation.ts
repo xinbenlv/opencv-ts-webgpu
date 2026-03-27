@@ -28,32 +28,35 @@ export type Quat = [number, number, number, number];
  *   m[6] m[7] m[8]
  */
 export function mat3ToQuat(m: Float32Array): Quat {
-  const trace = m[0] + m[4] + m[8];
+  const m0 = m[0]!, m1 = m[1]!, m2 = m[2]!;
+  const m3 = m[3]!, m4 = m[4]!, m5 = m[5]!;
+  const m6 = m[6]!, m7 = m[7]!, m8 = m[8]!;
+  const trace = m0 + m4 + m8;
   let x: number, y: number, z: number, w: number;
 
   if (trace > 0) {
     const s = 0.5 / Math.sqrt(trace + 1);
     w = 0.25 / s;
-    x = (m[7] - m[5]) * s;
-    y = (m[2] - m[6]) * s;
-    z = (m[3] - m[1]) * s;
-  } else if (m[0] > m[4] && m[0] > m[8]) {
-    const s = 2 * Math.sqrt(1 + m[0] - m[4] - m[8]);
-    w = (m[7] - m[5]) / s;
+    x = (m7 - m5) * s;
+    y = (m2 - m6) * s;
+    z = (m3 - m1) * s;
+  } else if (m0 > m4 && m0 > m8) {
+    const s = 2 * Math.sqrt(1 + m0 - m4 - m8);
+    w = (m7 - m5) / s;
     x = s / 4;
-    y = (m[1] + m[3]) / s;
-    z = (m[2] + m[6]) / s;
-  } else if (m[4] > m[8]) {
-    const s = 2 * Math.sqrt(1 + m[4] - m[0] - m[8]);
-    w = (m[2] - m[6]) / s;
-    x = (m[1] + m[3]) / s;
+    y = (m1 + m3) / s;
+    z = (m2 + m6) / s;
+  } else if (m4 > m8) {
+    const s = 2 * Math.sqrt(1 + m4 - m0 - m8);
+    w = (m2 - m6) / s;
+    x = (m1 + m3) / s;
     y = s / 4;
-    z = (m[5] + m[7]) / s;
+    z = (m5 + m7) / s;
   } else {
-    const s = 2 * Math.sqrt(1 + m[8] - m[0] - m[4]);
-    w = (m[3] - m[1]) / s;
-    x = (m[2] + m[6]) / s;
-    y = (m[5] + m[7]) / s;
+    const s = 2 * Math.sqrt(1 + m8 - m0 - m4);
+    w = (m3 - m1) / s;
+    x = (m2 + m6) / s;
+    y = (m5 + m7) / s;
     z = s / 4;
   }
 
@@ -139,9 +142,9 @@ export function slerpQuat(q0: Quat, q1: Quat, t: number): Quat {
 function extractRotation(T: SE3): Float32Array {
   // row-major output: [r00,r01,r02, r10,r11,r12, r20,r21,r22]
   return new Float32Array([
-    T[0], T[4], T[8],   // row 0
-    T[1], T[5], T[9],   // row 1
-    T[2], T[6], T[10],  // row 2
+    T[0]!, T[4]!, T[8]!,   // row 0
+    T[1]!, T[5]!, T[9]!,   // row 1
+    T[2]!, T[6]!, T[10]!,  // row 2
   ]);
 }
 
@@ -150,11 +153,11 @@ function buildSE3(rot: Float32Array, tx: number, ty: number, tz: number): SE3 {
   // col-major 4×4
   const T = new Float32Array(16);
   // col 0
-  T[0] = rot[0]; T[1] = rot[3]; T[2] = rot[6]; T[3] = 0;
+  T[0] = rot[0]!; T[1] = rot[3]!; T[2] = rot[6]!; T[3] = 0;
   // col 1
-  T[4] = rot[1]; T[5] = rot[4]; T[6] = rot[7]; T[7] = 0;
+  T[4] = rot[1]!; T[5] = rot[4]!; T[6] = rot[7]!; T[7] = 0;
   // col 2
-  T[8] = rot[2]; T[9] = rot[5]; T[10] = rot[8]; T[11] = 0;
+  T[8] = rot[2]!; T[9] = rot[5]!; T[10] = rot[8]!; T[11] = 0;
   // col 3 (translation)
   T[12] = tx; T[13] = ty; T[14] = tz; T[15] = 1;
   return T;
@@ -180,9 +183,9 @@ export function interpolateSE3(T0: SE3, T1: SE3, t: number): SE3 {
   const rt = quatToMat3(qt);
 
   // Lerp translation (column 3, rows 0-2 in col-major → indices 12, 13, 14)
-  const tx = T0[12] + t * (T1[12] - T0[12]);
-  const ty = T0[13] + t * (T1[13] - T0[13]);
-  const tz = T0[14] + t * (T1[14] - T0[14]);
+  const tx = T0[12]! + t * (T1[12]! - T0[12]!);
+  const ty = T0[13]! + t * (T1[13]! - T0[13]!);
+  const tz = T0[14]! + t * (T1[14]! - T0[14]!);
 
   return buildSE3(rt, tx, ty, tz);
 }
@@ -198,7 +201,7 @@ export function interpolatePose(
 ): Float32Array {
   const out = new Float32Array(pose0.length);
   for (let i = 0; i < pose0.length; i++) {
-    out[i] = pose0[i] + t * (pose1[i] - pose0[i]);
+    out[i] = pose0[i]! + t * (pose1[i]! - pose0[i]!);
   }
   return out;
 }

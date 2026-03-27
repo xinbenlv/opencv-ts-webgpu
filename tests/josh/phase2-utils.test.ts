@@ -84,7 +84,7 @@ describe('quatToMat3', () => {
     const m = quatToMat3([0, 0, 0, 1]);
     const id = identityMat3();
     for (let i = 0; i < 9; i++) {
-      expect(approx(m[i], id[i])).toBe(true);
+      expect(approx(m[i]!, id[i]!)).toBe(true);
     }
   });
 });
@@ -98,7 +98,7 @@ describe('mat3ToQuat / quatToMat3 round-trip', () => {
     const q = mat3ToQuat(original);
     const recovered = quatToMat3(q);
     for (let i = 0; i < 9; i++) {
-      expect(approx(recovered[i], original[i], 1e-5)).toBe(true);
+      expect(approx(recovered[i]!, original[i]!, 1e-5)).toBe(true);
     }
   });
 
@@ -114,7 +114,7 @@ describe('mat3ToQuat / quatToMat3 round-trip', () => {
     const q = mat3ToQuat(original);
     const recovered = quatToMat3(q);
     for (let i = 0; i < 9; i++) {
-      expect(approx(recovered[i], original[i], 1e-5)).toBe(true);
+      expect(approx(recovered[i]!, original[i]!, 1e-5)).toBe(true);
     }
   });
 });
@@ -128,14 +128,14 @@ describe('slerpQuat endpoints', () => {
 
   it('t=0 returns q0', () => {
     const r = slerpQuat(q0, q1, 0);
-    for (let i = 0; i < 4; i++) expect(approx(r[i], q0[i])).toBe(true);
+    for (let i = 0; i < 4; i++) expect(approx(r[i]!, q0[i]!)).toBe(true);
   });
 
   it('t=1 returns q1 (or its negative)', () => {
     const r = slerpQuat(q0, q1, 1);
     // Accept either q1 or -q1 (both represent the same rotation)
-    const pos = q1.every((v, i) => approx(r[i], v));
-    const neg = q1.every((v, i) => approx(r[i], -v));
+    const pos = q1.every((v, i) => approx(r[i]!, v));
+    const neg = q1.every((v, i) => approx(r[i]!, -v));
     expect(pos || neg).toBe(true);
   });
 });
@@ -168,13 +168,13 @@ describe('interpolateSE3', () => {
     const T1 = translationMat4(2, 0, 0);
     const Tm = interpolateSE3(T0, T1, 0.5);
     // Translation components are at indices 12, 13, 14
-    expect(approx(Tm[12], 1)).toBe(true);
-    expect(approx(Tm[13], 0)).toBe(true);
-    expect(approx(Tm[14], 0)).toBe(true);
+    expect(approx(Tm[12]!, 1)).toBe(true);
+    expect(approx(Tm[13]!, 0)).toBe(true);
+    expect(approx(Tm[14]!, 0)).toBe(true);
     // Rotation should still be identity
-    expect(approx(Tm[0], 1)).toBe(true);
-    expect(approx(Tm[5], 1)).toBe(true);
-    expect(approx(Tm[10], 1)).toBe(true);
+    expect(approx(Tm[0]!, 1)).toBe(true);
+    expect(approx(Tm[5]!, 1)).toBe(true);
+    expect(approx(Tm[10]!, 1)).toBe(true);
   });
 
   it('midpoint between identity and 90° Z rotation gives 45° rotation', () => {
@@ -184,8 +184,8 @@ describe('interpolateSE3', () => {
     const c45 = Math.cos(Math.PI / 4);
     const s45 = Math.sin(Math.PI / 4);
     // col-major: T[0]=cos, T[1]=sin, T[4]=-sin, T[5]=cos
-    expect(approx(Tm[0], c45, 1e-5)).toBe(true);
-    expect(approx(Tm[1], s45, 1e-5)).toBe(true);
+    expect(approx(Tm[0]!, c45, 1e-5)).toBe(true);
+    expect(approx(Tm[1]!, s45, 1e-5)).toBe(true);
   });
 });
 
@@ -199,7 +199,7 @@ describe('interpolatePose', () => {
     const pose1 = new Float32Array(n).fill(1);
     const result = interpolatePose(pose0, pose1, 0.5);
     for (let i = 0; i < n; i++) {
-      expect(approx(result[i], 0.5)).toBe(true);
+      expect(approx(result[i]!, 0.5)).toBe(true);
     }
   });
 
@@ -227,7 +227,7 @@ describe('mat4Multiply', () => {
     const T = translationMat4(3, 4, 5);
     const result = mat4Multiply(I, T);
     for (let i = 0; i < 16; i++) {
-      expect(approx(result[i], T[i])).toBe(true);
+      expect(approx(result[i]!, T[i]!)).toBe(true);
     }
   });
 
@@ -236,7 +236,7 @@ describe('mat4Multiply', () => {
     const T = translationMat4(1, 2, 3);
     const result = mat4Multiply(T, I);
     for (let i = 0; i < 16; i++) {
-      expect(approx(result[i], T[i])).toBe(true);
+      expect(approx(result[i]!, T[i]!)).toBe(true);
     }
   });
 
@@ -244,9 +244,9 @@ describe('mat4Multiply', () => {
     const T1 = translationMat4(1, 0, 0);
     const T2 = translationMat4(2, 0, 0);
     const result = mat4Multiply(T1, T2);
-    expect(approx(result[12], 3)).toBe(true);
-    expect(approx(result[13], 0)).toBe(true);
-    expect(approx(result[14], 0)).toBe(true);
+    expect(approx(result[12]!, 3)).toBe(true);
+    expect(approx(result[13]!, 0)).toBe(true);
+    expect(approx(result[14]!, 0)).toBe(true);
   });
 });
 
@@ -260,11 +260,11 @@ describe('concatChunkTrajectory', () => {
     const result = concatChunkTrajectory([I], [T1]);
     expect(result.length).toBe(2);
     // First element is unchanged I
-    for (let i = 0; i < 16; i++) expect(approx(result[0][i], I[i])).toBe(true);
+    for (let i = 0; i < 16; i++) expect(approx(result[0]![i]!, I[i]!)).toBe(true);
     // Second element = I × T(1,0,0) = T(1,0,0)
-    expect(approx(result[1][12], 1)).toBe(true);
-    expect(approx(result[1][13], 0)).toBe(true);
-    expect(approx(result[1][14], 0)).toBe(true);
+    expect(approx(result[1]![12]!, 1)).toBe(true);
+    expect(approx(result[1]![13]!, 0)).toBe(true);
+    expect(approx(result[1]![14]!, 0)).toBe(true);
   });
 
   it('chunk2 with anchor T(5,0,0) shifts chunk2 poses to world frame', () => {
@@ -272,15 +272,15 @@ describe('concatChunkTrajectory', () => {
     const local = translationMat4(2, 0, 0);
     const result = concatChunkTrajectory([identityMat4(), anchor], [local]);
     // anchor × T(2,0,0) = T(7,0,0)
-    const world = result[result.length - 1];
-    expect(approx(world[12], 7)).toBe(true);
+    const world = result[result.length - 1]!;
+    expect(approx(world[12]!, 7)).toBe(true);
   });
 
   it('empty chunk1 returns chunk2 unchanged', () => {
     const T = translationMat4(3, 0, 0);
     const result = concatChunkTrajectory([], [T]);
     expect(result.length).toBe(1);
-    for (let i = 0; i < 16; i++) expect(approx(result[0][i], T[i])).toBe(true);
+    for (let i = 0; i < 16; i++) expect(approx(result[0]![i]!, T[i]!)).toBe(true);
   });
 
   it('empty chunk2 returns chunk1 unchanged', () => {

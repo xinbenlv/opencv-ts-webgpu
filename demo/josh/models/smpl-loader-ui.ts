@@ -261,7 +261,6 @@ class PickleParser {
     this.buf = buf;
   }
 
-  private peek(): number { return this.buf[this.pos] ?? 0; }
   private read1(): number { return this.buf[this.pos++] ?? 0; }
 
   private readBytes(n: number): Uint8Array {
@@ -317,21 +316,6 @@ class PickleParser {
     return this.stack.splice(markIdx);
   }
 
-  /** Attempt numpy array reconstruction from a REDUCE call. */
-  private tryReconstructNdarray(
-    func: string,
-    args: PickleObj[],
-  ): Float32Array | Int32Array | Uint32Array | null {
-    // numpy._core.multiarray._reconstruct(np.ndarray, (0,), b'b')
-    // followed by BUILD with state = (1, shape, dtype_str, isF, rawBytes)
-    if (func === 'numpy.core.multiarray._reconstruct'
-      || func === 'numpy._core.multiarray._reconstruct'
-      || func === 'numpy.ndarray') {
-      // Return a placeholder that BUILD will fill in
-      return null;
-    }
-    return null;
-  }
 
   parse(): PickleObj {
     while (this.pos < this.buf.length) {

@@ -24,7 +24,7 @@ export function mat4Multiply(a: Float32Array, b: Float32Array): Float32Array {
     for (let row = 0; row < 4; row++) {
       let sum = 0;
       for (let k = 0; k < 4; k++) {
-        sum += a[k * 4 + row] * b[col * 4 + k];
+        sum += a[k * 4 + row]! * b[col * 4 + k]!;
       }
       out[col * 4 + row] = sum;
     }
@@ -49,7 +49,7 @@ export function concatChunkTrajectory(chunk1: SE3[], chunk2: SE3[]): SE3[] {
   if (chunk1.length === 0) return [...chunk2];
   if (chunk2.length === 0) return [...chunk1];
 
-  const anchor = chunk1[chunk1.length - 1];
+  const anchor = chunk1[chunk1.length - 1]!;
   const transformedChunk2 = chunk2.map((pose) => mat4Multiply(anchor, pose));
   return [...chunk1, ...transformedChunk2];
 }
@@ -68,7 +68,7 @@ export function concatChunkParams(
   if (chunk1.length === 0) return [...chunk2];
   if (chunk2.length === 0) return [...chunk1];
 
-  const anchor = chunk1[chunk1.length - 1].cameraPose;
+  const anchor = chunk1[chunk1.length - 1]!.cameraPose;
   const transformedChunk2: FrameParams[] = chunk2.map((fp) => ({
     ...fp,
     cameraPose: mat4Multiply(anchor, fp.cameraPose),

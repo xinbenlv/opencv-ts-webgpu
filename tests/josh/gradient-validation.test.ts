@@ -97,7 +97,7 @@ describe('Rodrigues formula', () => {
 
     for (let i = 0; i < 3; i++) {
       for (let j = 0; j < 3; j++) {
-        expect(data[i]![j]).toBeCloseTo(i === j ? 1 : 0, 4);
+        expect((data as number[][])[i]![j]!).toBeCloseTo(i === j ? 1 : 0, 4);
       }
     }
 
@@ -199,7 +199,7 @@ describe('Gradient computation', () => {
     // Target slightly different from posed result
     const targetData = new Float32Array(TPOSE_DATA);
     for (let i = 0; i < targetData.length; i++) {
-      targetData[i] += (Math.random() - 0.5) * 0.1;
+      targetData[i] = targetData[i]! + (Math.random() - 0.5) * 0.1;
     }
     const target = tf.tensor2d(targetData, [24, 3]);
 
@@ -215,14 +215,14 @@ describe('Gradient computation', () => {
     for (let i = 0; i < 72; i++) {
       // f(x + eps)
       const posePlus = new Float32Array(poseData);
-      posePlus[i] += eps;
+      posePlus[i] = posePlus[i]! + eps;
       const jointsPlus = smplForwardFK(tf.tensor1d(posePlus), tpose, PARENT_INDICES);
       const lossPlus = jointLoss(jointsPlus, target);
       const lp = lossPlus.arraySync() as number;
 
       // f(x - eps)
       const poseMinus = new Float32Array(poseData);
-      poseMinus[i] -= eps;
+      poseMinus[i] = poseMinus[i]! - eps;
       const jointsMinus = smplForwardFK(tf.tensor1d(poseMinus), tpose, PARENT_INDICES);
       const lossMinus = jointLoss(jointsMinus, target);
       const lm = lossMinus.arraySync() as number;
@@ -340,13 +340,6 @@ describe('Adam optimizer (CPU reference)', () => {
     const eps = 1e-8;
     const g = 2.0; // gradient
     const x0 = 5.0; // initial param
-
-    // Step 1:
-    const m1 = (1 - beta1) * g; // 0.2
-    const v1 = (1 - beta2) * g * g; // 0.004
-    const mHat1 = m1 / (1 - beta1); // 2.0
-    const vHat1 = v1 / (1 - beta2); // 4.0
-    const x1 = x0 - lr * mHat1 / (Math.sqrt(vHat1) + eps); // 5.0 - 0.1 * 2/2 = 4.9
 
     const x = tf.variable(tf.tensor1d([x0]));
     const optimizer = tf.train.adam(lr, beta1, beta2, eps);

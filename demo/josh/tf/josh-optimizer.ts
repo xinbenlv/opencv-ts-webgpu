@@ -61,8 +61,8 @@ export async function runJOSHOptimizer(
 
   // Build tf.Variables for all parameters
   const params = createSMPLParams({
-    pose: initPose,
-    betas: initBetas,
+    ...(initPose !== undefined ? { pose: initPose } : {}),
+    ...(initBetas !== undefined ? { betas: initBetas } : {}),
   });
 
   // Previous-frame vertices tensor (if provided)

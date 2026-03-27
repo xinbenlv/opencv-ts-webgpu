@@ -421,7 +421,7 @@ export class ProgressUI {
   }
 
   reset(): void {
-    for (const [name, state] of this._phaseState) {
+    for (const [_name, state] of this._phaseState) {
       state.current = 0;
       state.total   = 0;
       state.status  = 'pending';
@@ -537,8 +537,8 @@ export class ProgressUI {
     // Auto-scale
     const minLoss = Math.min(...pts.map((p) => p.loss));
     const maxLoss = Math.max(...pts.map((p) => p.loss));
-    const minFrame = pts[0].frameIndex;
-    const maxFrame = pts[pts.length - 1].frameIndex;
+    const minFrame = pts[0]!.frameIndex;
+    const maxFrame = pts[pts.length - 1]!.frameIndex;
 
     const lossRange  = maxLoss - minLoss || 1;
     const frameRange = maxFrame - minFrame || 1;
@@ -578,9 +578,9 @@ export class ProgressUI {
 
     // Loss line
     ctx.beginPath();
-    ctx.moveTo(toX(pts[0].frameIndex), toY(pts[0].loss));
+    ctx.moveTo(toX(pts[0]!.frameIndex), toY(pts[0]!.loss));
     for (let i = 1; i < pts.length; i++) {
-      ctx.lineTo(toX(pts[i].frameIndex), toY(pts[i].loss));
+      ctx.lineTo(toX(pts[i]!.frameIndex), toY(pts[i]!.loss));
     }
     const grad = ctx.createLinearGradient(PAD.left, 0, PAD.left + plotW, 0);
     grad.addColorStop(0, '#4CAF50');
@@ -606,7 +606,7 @@ export class ProgressUI {
     const labelCount = Math.min(5, pts.length);
     for (let i = 0; i < labelCount; i++) {
       const idx = Math.round((i / (labelCount - 1)) * (pts.length - 1));
-      const pt  = pts[idx];
+      const pt  = pts[idx]!;
       const x   = toX(pt.frameIndex);
       ctx.fillText(`f${pt.frameIndex}`, x, PAD.top + plotH + 14);
     }

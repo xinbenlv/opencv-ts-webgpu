@@ -17,33 +17,6 @@ import type { SMPLModelData } from '../../demo/josh/models/smpl-loader-ui.ts';
 const N_VERTS = 6890;
 const N_JOINTS = 24;
 
-// T-pose joints (simplified skeleton, y is up)
-const TPOSE_JOINTS_RAW = new Float32Array([
-   0,    0.9,  0,   // 0  pelvis
-   0.10, 0.82, 0,   // 1  l_hip
-  -0.10, 0.82, 0,   // 2  r_hip
-   0,    1.05, 0,   // 3  spine1
-   0.10, 0.45, 0,   // 4  l_knee
-  -0.10, 0.45, 0,   // 5  r_knee
-   0,    1.20, 0,   // 6  spine2
-   0.10, 0.08, 0,   // 7  l_ankle
-  -0.10, 0.08, 0,   // 8  r_ankle
-   0,    1.35, 0,   // 9  spine3
-   0.10, 0.00, 0,   // 10 l_foot
-  -0.10, 0.00, 0,   // 11 r_foot
-   0,    1.50, 0,   // 12 neck
-   0.18, 1.35, 0,   // 13 l_collar
-  -0.18, 1.35, 0,   // 14 r_collar
-   0,    1.70, 0,   // 15 head
-   0.18, 1.20, 0,   // 16 l_shoulder
-  -0.18, 1.20, 0,   // 17 r_shoulder
-   0.42, 1.20, 0,   // 18 l_elbow
-  -0.42, 1.20, 0,   // 19 r_elbow
-   0.65, 1.20, 0,   // 20 l_wrist
-  -0.65, 1.20, 0,   // 21 r_wrist
-   0.72, 1.20, 0,   // 22 l_hand
-  -0.72, 1.20, 0,   // 23 r_hand
-]);
 
 const PARENTS = [-1, 0,0,0, 1,2,3, 4,5,6, 7,8,9, 9,9,12, 13,14, 16,17, 18,19, 20,21];
 

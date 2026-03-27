@@ -42,7 +42,6 @@ export class SmplRenderer {
   private normalBuffer: GPUBuffer | null = null;
   private indexBuffer: GPUBuffer | null = null;
   private indexCount = 0;
-  private vertexCount = 0;
 
   constructor(device: GPUDevice, canvas: HTMLCanvasElement) {
     this.device = device;
@@ -71,7 +70,6 @@ export class SmplRenderer {
 
   /** Upload mesh topology and normals. Call once (or when mesh changes). */
   setMesh(vertices: Float32Array, normals: Float32Array, faces: Uint32Array): void {
-    this.vertexCount = vertices.length / 3;
     this.indexCount = faces.length;
 
     this.vertexBuffer?.destroy();
@@ -90,7 +88,7 @@ export class SmplRenderer {
     if (!this.vertexBuffer) {
       throw new Error('Call setMesh() before updateVertices()');
     }
-    this.device.queue.writeBuffer(this.vertexBuffer, 0, vertices);
+    this.device.queue.writeBuffer(this.vertexBuffer, 0, vertices as Float32Array<ArrayBuffer>);
   }
 
   /** Render one frame to the canvas. */
@@ -231,8 +229,8 @@ export class SmplRenderer {
 
     // Directional light: slightly from above-right
     const lightDir = new Float32Array([0.6, 1.0, 0.8]);
-    const len = Math.sqrt(lightDir[0] ** 2 + lightDir[1] ** 2 + lightDir[2] ** 2);
-    lightDir[0] /= len; lightDir[1] /= len; lightDir[2] /= len;
+    const len = Math.sqrt(lightDir[0]! ** 2 + lightDir[1]! ** 2 + lightDir[2]! ** 2);
+    lightDir[0] = lightDir[0]! / len; lightDir[1] = lightDir[1]! / len; lightDir[2] = lightDir[2]! / len;
 
     const data = new Float32Array(UNIFORM_FLOATS);
     data.set(mvp, 0);
