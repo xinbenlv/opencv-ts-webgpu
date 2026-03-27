@@ -772,6 +772,9 @@ export class SMPLLoaderUI {
   }
 
   private async init() {
+    // Show a loading state immediately so the container isn't blank
+    this.renderLoading('Checking for SMPL model…');
+
     // Try to hydrate from IndexedDB first
     try {
       const cached = await idbLoad();
@@ -782,36 +785,61 @@ export class SMPLLoaderUI {
         return;
       }
     } catch {
-      // IndexedDB unavailable (SSR / private mode) — silently ignore
+      // IndexedDB unavailable — silently ignore
     }
 
     // Try auto-loading from pre-converted binary (fast, no pkl parsing needed)
     const BIN_PATH = '/smpl/smpl-neutral.smpl.bin';
     try {
       const resp = await fetch(BIN_PATH, { method: 'HEAD' });
-      if (resp.ok && !this.aborted) {
-        this.renderLoading('Loading SMPL model…');
-        const buf = await (await fetch(BIN_PATH)).arrayBuffer();
-        const smpl = parseSMPLBin(buf);
-        if (!this.aborted) {
-          this.model = smpl;
-          this.renderLoaded(smpl, false);
-          this.opts.onLoad?.(smpl);
-          await idbSave(smpl).catch(() => {});
-          return;
-        }
+      if (!resp.ok) {
+        this.renderEmpty(); return;
+      }
+      if (this.aborted) return;
+      this.renderLoading('Loading SMPL model (41 MB)…');
+      const buf = await (await fetch(BIN_PATH)).arrayBuffer();
+      if (this.aborted) return;
+      this.renderLoading('Parsing SMPL arrays…');
+      const smpl = parseSMPLBin(buf);
+      if (!this.aborted) {
+        this.model = smpl;
+        this.renderLoaded(smpl, false);
+        this.opts.onLoad?.(smpl);
+        await idbSave(smpl).catch(() => {});
       }
     } catch (e) {
-      console.warn('[SMPLLoaderUI] auto-load failed:', e);
-      // Fall through to drag-drop UI
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[SMPLLoaderUI] auto-load error:', e);
+      // Show error in UI with fallback to drag-drop
+      if (!this.aborted) {
+        this.renderLoadError(msg);
+      }
     }
-
-    if (!this.aborted) this.renderEmpty();
   }
 
   private renderLoading(msg: string) {
     const c = this.opts.container;
-    c.innerHTML = `<div style="padding:24px;color:#8b949e;font-size:13px;">${msg}</div>`;
+    c.innerHTML = `
+      <div style="padding:24px;color:#8b949e;font-size:13px;display:flex;align-items:center;gap:12px;">
+        <div style="width:120px;height:6px;background:#21262d;border-radius:3px;overflow:hidden;">
+          <div style="height:100%;background:#58a6ff;border-radius:3px;animation:smpl-pulse 1.2s ease-in-out infinite;width:60%;"></div>
+        </div>
+        <span>${msg}</span>
+      </div>
+      <style>@keyframes smpl-pulse{0%,100%{transform:translateX(-100%)}50%{transform:translateX(200%)}}</style>`;
+  }
+
+  private renderLoadError(msg: string) {
+    const c = this.opts.container;
+    c.innerHTML = `
+      <div style="padding:16px;color:#f85149;font-size:13px;background:#21262d;border-radius:8px;max-width:420px;">
+        <strong>SMPL auto-load failed:</strong><br/>
+        <code style="font-size:11px;word-break:break-all;">${msg}</code><br/>
+        <button id="smpl-fallback-btn" style="margin-top:10px;padding:6px 14px;background:#1f6feb;border:none;border-radius:4px;color:white;cursor:pointer;font-size:12px;">
+          Upload manually instead
+        </button>
+      </div>`;
+    c.querySelector('#smpl-fallback-btn')?.addEventListener('click', () => this.renderEmpty());
   }
 
   // ── DOM helpers ───────────────────────────────────────────────────────────
