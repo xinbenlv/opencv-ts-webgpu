@@ -7,13 +7,11 @@ import {
   SMPL_POSE_DIM,
   SMPL_KINEMATIC_TREE,
 } from '../models/smpl.ts';
-import { cachedFetchModel } from '../models/cached-fetch.ts';
 import { axisAngleToRotMat, getTposeJoints, buildSyntheticSmplModel } from '../models/smpl-synthetic.ts';
+import { ROMPNode } from './romp.node.ts';
 
 const HMR_H = 384;
 const HMR_W = 384;
-const ROMP_H = 512;
-const ROMP_W = 512;
 
 const rgbLayout = computeBufferLayout([dim(HMR_H), dim(HMR_W), dim(3)] as Shape3D, 'f32');
 const verticesLayout = computeBufferLayout([dim(SMPL_VERTEX_COUNT), dim(3)] as Shape2D, 'f32');
@@ -31,12 +29,6 @@ const OUTPUT_PORTS = [
   { name: 'jointPositions', layout: jointsLayout },
   { name: 'estimatedCamera', layout: cameraLayout },
 ] as const satisfies readonly PortDescriptor[];
-
-let ortModule: typeof import('onnxruntime-web') | null = null;
-async function getOrt() {
-  if (!ortModule) ortModule = await import('onnxruntime-web');
-  return ortModule;
-}
 
 /**
  * CPU-side SMPL forward kinematics: axis-angle pose → 3D joint positions.
@@ -97,11 +89,14 @@ function computeJointsFromPose(poseAxisAngle: Float32Array, tposeJoints: Float32
 }
 
 /**
- * Node B: Human Mesh Recovery using ROMP ONNX + CPU SMPL forward kinematics.
+ * Node B: Human Mesh Recovery using BlazePose 3D (via ROMPNode) + CPU SMPL FK.
  *
- * ROMP: image → SMPL params (pose θ, shape β, camera)
+ * BlazePose: image → 33 3D landmarks → SMPL axis-angle pose init
  * CPU FK: pose θ → joint positions (using kinematic tree)
  * Synthetic mesh: vertices from buildSyntheticSmplModel()
+ *
+ * Uses GPU readback to get the current frame as ImageData, then passes to
+ * BlazePose via an OffscreenCanvas.
  */
 export class HumanMeshRecoveryNode
   implements GComputeNode<typeof INPUT_PORTS, typeof OUTPUT_PORTS>
@@ -113,49 +108,31 @@ export class HumanMeshRecoveryNode
   readonly outputs = OUTPUT_PORTS;
 
   private _device: GPUDevice | null = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private _rompSession: any = null;
+  private _rompNode = new ROMPNode();
   private _useSimulation = false;
   private _tposeJoints: Float32Array | null = null;
 
-  private _rompInput = new Float32Array(1 * ROMP_H * ROMP_W * 3);
   private _verticesOut = new Float32Array(SMPL_VERTEX_COUNT * 3);
   private _jointsOut = new Float32Array(SMPL_JOINT_COUNT * 3);
-
-  constructor(
-    private readonly _rompModelUrl = './assets/models/romp.onnx',
-  ) {}
 
   async initialize(ctx: NodeContext): Promise<void> {
     this._device = ctx.device;
     this._tposeJoints = getTposeJoints();
 
-    // Pre-fill vertices from synthetic model (used for mesh output)
     const synth = buildSyntheticSmplModel();
     this._verticesOut.set(synth.meanTemplate.subarray(0, this._verticesOut.length));
 
-    const ort = await getOrt();
-    ort.env.wasm.wasmPaths = './assets/ort/';
-    ort.env.wasm.numThreads = 1;
+    const status: ((id: string, s: string, t: string) => void) | undefined =
+      (globalThis as any).__joshLoadingStatus;
 
-    const status: ((id: string, s: string, t: string) => void) | undefined = (globalThis as any).__joshLoadingStatus;
-
+    status?.('hmrModel', 'active', 'Node B: Loading BlazePose 3D...');
     try {
-      const rompBuf = await cachedFetchModel(
-        this._rompModelUrl, 'hmrModel', 'Node B: ROMP pose model', '111 MB', status,
-      );
-      status?.('hmrModel', 'active', 'Node B: Creating ROMP session...');
-      this._rompSession = await ort.InferenceSession.create(rompBuf, {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'all',
-      });
-      status?.('hmrModel', 'done', 'Node B: ROMP pose model ready');
+      await this._rompNode.load();
+      status?.('hmrModel', 'done', 'Node B: BlazePose 3D ready');
       status?.('smplModel', 'done', 'Node B: SMPL forward kinematics (CPU)');
-      console.log('[HMR] ROMP loaded:', this._rompSession.inputNames, '→', this._rompSession.outputNames);
     } catch (e) {
-      console.warn('[HMR] ROMP loading failed, using simulated animation:', e);
-      status?.('hmrModel', 'warn', 'Node B: ROMP unavailable — using simulated pose');
-      status?.('smplModel', 'warn', 'Node B: Using simulated mesh');
+      console.warn('[HMR] BlazePose load failed, using simulated animation:', e);
+      status?.('hmrModel', 'warn', 'Node B: BlazePose unavailable — using simulated pose');
       this._useSimulation = true;
     }
   }
@@ -195,7 +172,7 @@ export class HumanMeshRecoveryNode
     jointsOut: GPUBuffer,
     cameraOut: GPUBuffer,
   ): Promise<void> {
-    // GPU readback
+    // GPU readback → Float32Array [HMR_H * HMR_W * 3] (values in [0,1])
     const readbackEncoder = this._device!.createCommandEncoder({ label: 'hmr_readback' });
     const staging = this._device!.createBuffer({
       size: rgbLayout.byteLength,
@@ -209,55 +186,34 @@ export class HumanMeshRecoveryNode
     staging.unmap();
     staging.destroy();
 
-    // Resize 384→512 NHWC
-    for (let y = 0; y < ROMP_H; y++) {
-      for (let x = 0; x < ROMP_W; x++) {
-        const x0 = Math.min(Math.floor((x / ROMP_W) * HMR_W), HMR_W - 1);
-        const y0 = Math.min(Math.floor((y / ROMP_H) * HMR_H), HMR_H - 1);
-        const srcIdx = (y0 * HMR_W + x0) * 3;
-        const dstIdx = (y * ROMP_W + x) * 3;
-        this._rompInput[dstIdx] = rgbData[srcIdx]!;
-        this._rompInput[dstIdx + 1] = rgbData[srcIdx + 1]!;
-        this._rompInput[dstIdx + 2] = rgbData[srcIdx + 2]!;
-      }
+    // Convert float32 [0,1] → Uint8ClampedArray RGBA for ImageData
+    const rgba = new Uint8ClampedArray(HMR_W * HMR_H * 4);
+    for (let i = 0; i < HMR_W * HMR_H; i++) {
+      rgba[i * 4]     = Math.round((rgbData[i * 3]     ?? 0) * 255);
+      rgba[i * 4 + 1] = Math.round((rgbData[i * 3 + 1] ?? 0) * 255);
+      rgba[i * 4 + 2] = Math.round((rgbData[i * 3 + 2] ?? 0) * 255);
+      rgba[i * 4 + 3] = 255;
     }
 
-    // ROMP inference
-    const ort = await getOrt();
-    const rompTensor = new ort.Tensor('float32', this._rompInput, [1, ROMP_H, ROMP_W, 3]);
-    const rompFeeds: Record<string, InstanceType<typeof ort.Tensor>> = {};
-    rompFeeds[this._rompSession.inputNames[0]!] = rompTensor;
-    const rompResults = await this._rompSession.run(rompFeeds);
-    const centerMaps = rompResults[this._rompSession.outputNames[0]!]!.data as Float32Array;
-    const paramsMaps = rompResults[this._rompSession.outputNames[1]!]!.data as Float32Array;
+    // Pass ImageData directly to BlazePose (supported input type)
+    const imageData = new ImageData(rgba, HMR_W, HMR_H);
 
-    // Find best detection
-    const mapSize = 64;
-    let bestIdx = 0;
-    let bestVal = -Infinity;
-    for (let i = 0; i < mapSize * mapSize; i++) {
-      if (centerMaps[i]! > bestVal) {
-        bestVal = centerMaps[i]!;
-        bestIdx = i;
-      }
-    }
+    const result = await this._rompNode.estimate(imageData);
 
-    // Extract SMPL params: [0-2] camera, [3-74] pose (72), [75-84] shape (10)
     const camera = new Float32Array(3);
     const poseAxisAngle = new Float32Array(SMPL_POSE_DIM);
 
-    for (let c = 0; c < 3; c++) {
-      camera[c] = paramsMaps[c * mapSize * mapSize + bestIdx]!;
-    }
-    for (let c = 0; c < SMPL_POSE_DIM; c++) {
-      poseAxisAngle[c] = paramsMaps[(c + 3) * mapSize * mapSize + bestIdx]!;
+    if (result && result.confidence > 0.2) {
+      poseAxisAngle.set(result.pose);
+      camera.set(result.cam);
+    } else {
+      // Low confidence — keep T-pose
+      camera[0] = 1.0;
     }
 
-    // CPU SMPL forward kinematics: pose → joints
     const joints = computeJointsFromPose(poseAxisAngle, this._tposeJoints!);
     this._jointsOut.set(joints);
 
-    // Upload to GPU
     this._device!.queue.writeBuffer(verticesOut, 0, this._verticesOut);
     this._device!.queue.writeBuffer(jointsOut, 0, this._jointsOut);
     this._device!.queue.writeBuffer(cameraOut, 0, camera);
@@ -286,6 +242,6 @@ export class HumanMeshRecoveryNode
   }
 
   dispose(): void {
-    this._rompSession?.release();
+    this._rompNode.dispose();
   }
 }

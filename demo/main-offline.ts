@@ -10,6 +10,9 @@
 
 import { SMPLLoaderUI } from './josh/models/smpl-loader-ui.ts';
 import type { SMPLModelData } from './josh/models/smpl-loader-ui.ts';
+import { BatchPipeline } from './josh/batch/batch-pipeline.ts';
+import type { BatchProgress } from './josh/batch/batch-pipeline.ts';
+import { getGpuDevice } from '../src/backends/webgpu/device.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -132,63 +135,91 @@ function setupVideoDropZone(
 }
 
 // ---------------------------------------------------------------------------
-// Simulated batch processing (real pipeline wired in later)
+// Real batch pipeline
 // ---------------------------------------------------------------------------
 
-async function runOfflinePipeline(
-  els: OfflineUIElements,
-) {
+let _abortController: AbortController | null = null;
+
+async function runOfflinePipeline(els: OfflineUIElements) {
   if (!smplModel || !videoFile) return;
   isProcessing = true;
   lossHistory.length = 0;
+  _abortController = new AbortController();
 
   updateProcessButton(els.processBtn);
   els.progressSection.style.display = 'block';
-
-  const totalFrames = 120; // placeholder — will be replaced by real frame count
-
-  // Phase 1: Frame extraction
   els.phase1Bar.value = 0;
-  els.frameCounter.textContent = 'Phase 1 — extracting frames…';
-  for (let f = 0; f <= totalFrames; f++) {
-    await new Promise<void>((r) => setTimeout(r, 20));
-    els.phase1Bar.value = (f / totalFrames) * 100;
-    els.frameCounter.textContent = `Phase 1 — frame ${f} / ${totalFrames}`;
-  }
-
-  // Phase 2: Depth + HMR inference
   els.phase2Bar.value = 0;
-  els.frameCounter.textContent = 'Phase 2 — depth + HMR inference…';
-  for (let f = 0; f <= totalFrames; f++) {
-    await new Promise<void>((r) => setTimeout(r, 30));
-    els.phase2Bar.value = (f / totalFrames) * 100;
-    els.frameCounter.textContent = `Phase 2 — frame ${f} / ${totalFrames}`;
+  els.phase3Bar.value = 0;
+  els.frameCounter.textContent = 'Initializing WebGPU…';
+
+  // Get (or reuse) WebGPU device
+  let device: GPUDevice;
+  try {
+    device = await getGpuDevice();
+  } catch (e) {
+    els.frameCounter.textContent = `WebGPU unavailable: ${e instanceof Error ? e.message : String(e)}`;
+    isProcessing = false;
+    updateProcessButton(els.processBtn);
+    return;
   }
 
-  // Phase 3: JOSH solver optimization
-  els.phase3Bar.value = 0;
-  els.frameCounter.textContent = 'Phase 3 — JOSH solver…';
-  const totalIters = 700; // stage1 500 + stage2 200
-  for (let i = 0; i <= totalIters; i++) {
-    await new Promise<void>((r) => setTimeout(r, 2));
-    els.phase3Bar.value = (i / totalIters) * 100;
-    // Simulate exponential loss decay
-    const loss = 5.0 * Math.exp(-i * 0.008) + 0.2 * Math.random();
-    lossHistory.push(loss);
-    if (i % 10 === 0) {
-      drawLossCurve(els.lossCurveCanvas, lossHistory);
-      els.frameCounter.textContent = `Phase 3 — iter ${i} / ${totalIters}  loss=${loss.toFixed(4)}`;
+  // Create object URL from the File so BatchPipeline can fetch it
+  const videoUrl = URL.createObjectURL(videoFile);
+
+  function onProgress(p: BatchProgress) {
+    const frac = p.totalFrames > 0 ? p.frameIndex / p.totalFrames : 0;
+    const pct = Math.round(frac * 100);
+
+    if (p.phase === 'extract') {
+      els.phase1Bar.value = pct;
+      els.frameCounter.textContent = `Extracting frames — ${p.frameIndex} / ${p.totalFrames}`;
+    } else if (p.phase === 'optimize') {
+      els.phase2Bar.value = 100; // preprocessing done
+      const iterFrac = p.iterIndex != null && p.iterIndex > 0
+        ? (p.iterIndex / 700) * 100 : 0;
+      els.phase3Bar.value = Math.round(frac * 100 * 0.9 + iterFrac * 0.1);
+      if (p.loss != null) {
+        lossHistory.push(p.loss);
+        drawLossCurve(els.lossCurveCanvas, lossHistory);
+        els.frameCounter.textContent =
+          `Optimizing frame ${p.frameIndex + 1}/${p.totalFrames}` +
+          ` — iter ${p.iterIndex ?? 0}/700  loss=${p.loss.toFixed(4)}`;
+      }
+    } else {
+      // segment / mast3r / focal / romp / pose2d / contact / interpolate
+      els.phase2Bar.value = pct;
+      els.frameCounter.textContent =
+        `${p.phase.charAt(0).toUpperCase() + p.phase.slice(1)}` +
+        ` — frame ${p.frameIndex + 1} / ${p.totalFrames}`;
     }
   }
 
-  // Phase 4: Scrubber ready
-  els.timelineScrubber.max = String(totalFrames - 1);
-  els.timelineScrubber.value = '0';
-  els.timelineScrubber.disabled = false;
+  try {
+    const pipeline = new BatchPipeline(device, onProgress);
+    pipeline.setSmplModel(smplModel);
+    const result = await pipeline.process(videoUrl, _abortController.signal);
 
-  els.frameCounter.textContent = `Done — ${totalFrames} frames processed`;
-  isProcessing = false;
-  updateProcessButton(els.processBtn);
+    els.phase1Bar.value = 100;
+    els.phase2Bar.value = 100;
+    els.phase3Bar.value = 100;
+    els.timelineScrubber.max = String(result.frameCount - 1);
+    els.timelineScrubber.value = '0';
+    els.timelineScrubber.disabled = false;
+    els.frameCounter.textContent =
+      `Done — ${result.frameCount} frames in ${(result.processingTimeMs / 1000).toFixed(1)}s`;
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') {
+      els.frameCounter.textContent = 'Cancelled.';
+    } else {
+      console.error('[offline]', e);
+      els.frameCounter.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  } finally {
+    URL.revokeObjectURL(videoUrl);
+    isProcessing = false;
+    updateProcessButton(els.processBtn);
+  }
 }
 
 // ---------------------------------------------------------------------------

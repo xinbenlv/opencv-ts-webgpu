@@ -24,7 +24,6 @@ async function prefetchModels(): Promise<void> {
 
   await Promise.allSettled([
     cachedFetchModel('./assets/models/midas-v2.1-small-256.onnx', 'depthModel', 'Node A: MiDAS depth model', '64 MB', status),
-    cachedFetchModel('./assets/models/romp.onnx', 'hmrModel', 'Node B: ROMP pose model', '111 MB', status),
   ]);
   // Models are now in Cache API — node.initialize() will get instant cache hits
 }
