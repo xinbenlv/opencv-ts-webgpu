@@ -136,29 +136,30 @@ describe('mapBlazePoseToSMPL', () => {
     const { positions } = mapBlazePoseToSMPL(lms);
     const pelvis = positions[0]!;
 
+    // lmPos flips Y: position Y = 1 - landmark Y
     expect(pelvis[0]).toBeCloseTo((lhipX + rhipX) / 2, 5);
-    expect(pelvis[1]).toBeCloseTo((lhipY + rhipY) / 2, 5);
+    expect(pelvis[1]).toBeCloseTo((1 - lhipY + (1 - rhipY)) / 2, 5);
   });
 
   it('L_hip (joint 1) position matches BlazePose landmark 23', () => {
     const lms = makeUniformLandmarks(0.9);
     const { positions } = mapBlazePoseToSMPL(lms);
     expect(positions[1]![0]).toBeCloseTo(lms[23]!.x, 5);
-    expect(positions[1]![1]).toBeCloseTo(lms[23]!.y, 5);
+    expect(positions[1]![1]).toBeCloseTo(1 - lms[23]!.y, 5); // lmPos Y-flip
   });
 
   it('R_hip (joint 2) position matches BlazePose landmark 24', () => {
     const lms = makeUniformLandmarks(0.9);
     const { positions } = mapBlazePoseToSMPL(lms);
     expect(positions[2]![0]).toBeCloseTo(lms[24]!.x, 5);
-    expect(positions[2]![1]).toBeCloseTo(lms[24]!.y, 5);
+    expect(positions[2]![1]).toBeCloseTo(1 - lms[24]!.y, 5); // lmPos Y-flip
   });
 
   it('head (joint 15) position matches nose (landmark 0)', () => {
     const lms = makeUniformLandmarks(0.9);
     const { positions } = mapBlazePoseToSMPL(lms);
     expect(positions[15]![0]).toBeCloseTo(lms[0]!.x, 5);
-    expect(positions[15]![1]).toBeCloseTo(lms[0]!.y, 5);
+    expect(positions[15]![1]).toBeCloseTo(1 - lms[0]!.y, 5); // lmPos Y-flip
   });
 
   it('produces 24 confidence scores all in [0, 1]', () => {
@@ -262,10 +263,13 @@ describe('estimateCamera', () => {
     expect(cam[0]).toBeGreaterThan(0);
   });
 
-  it('returns tx ≈ 0 and ty ≈ 0.2 when pelvis is at (0.5, 0.6)', () => {
+  it('returns tx ≈ 0 and ty ≈ -0.2 when pelvis world-up Y is 0.6', () => {
+    // pelvis[1] = 0.6 means world-up Y = 0.6 (i.e. image Y = 1 - 0.6 = 0.4, lower half).
+    // cam[2] = (0.5 - pelvis[1]) * 2 = (0.5 - 0.6) * 2 = -0.2
+    // The negative sign ensures the renderer (which negates Y) places the pelvis correctly.
     const cam = estimateCamera([0.4, 0.6, 0], [0.6, 0.6, 0], [0.5, 0.6, 0]);
-    expect(cam[1]).toBeCloseTo(0, 5);       // (0.5 - 0.5) * 2 = 0
-    expect(cam[2]).toBeCloseTo(0.2, 5);     // (0.6 - 0.5) * 2 = 0.2
+    expect(cam[1]).toBeCloseTo(0, 5);        // tx: (0.5 - 0.5) * 2 = 0
+    expect(cam[2]).toBeCloseTo(-0.2, 5);     // ty: (0.5 - 0.6) * 2 = -0.2
   });
 
   it('falls back to scale = 1.0 when hip width is near zero', () => {
