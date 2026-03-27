@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MiDaS Depth → 3-D Point Cloud</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3147;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    header p  { font-size: 0.8rem; color: #94a3b8; }
+
+    /* ── Controls ─────────────────────────────────────────────────────────── */
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      padding: 0.75rem 1.5rem;
+      background: #141722;
+      border-bottom: 1px solid #2d3147;
+      align-items: center;
+    }
+    .ctrl-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      min-width: 180px;
+    }
+    .ctrl-group label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+    }
+    .ctrl-group .row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    input[type=range] { flex: 1; accent-color: #6366f1; }
+    .val { font-size: 0.8rem; font-variant-numeric: tabular-nums; min-width: 42px; }
+
+    .btn {
+      padding: 0.45rem 1rem;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    .btn-primary { background: #6366f1; color: #fff; }
+    .btn-primary:hover { background: #4f52d1; }
+    .btn-secondary { background: #2d3147; color: #e2e8f0; }
+    .btn-secondary:hover { background: #3d4263; }
+
+    /* ── Drop zone ───────────────────────────────────────────────────────── */
+    #drop-zone {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      border: 2px dashed #3d4263;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    #drop-zone:hover, #drop-zone.dragover {
+      border-color: #6366f1;
+      color: #e2e8f0;
+    }
+    #file-input { display: none; }
+
+    /* ── Status bar ──────────────────────────────────────────────────────── */
+    #status {
+      padding: 0.35rem 1.5rem;
+      background: #141722;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      border-bottom: 1px solid #2d3147;
+      min-height: 1.6rem;
+    }
+
+    /* ── Stats bar ───────────────────────────────────────────────────────── */
+    #stats {
+      display: flex;
+      gap: 2rem;
+      padding: 0.35rem 1.5rem;
+      background: #141722;
+      font-size: 0.75rem;
+      color: #64748b;
+      border-bottom: 1px solid #2d3147;
+    }
+    #stats span { color: #e2e8f0; }
+
+    /* ── Three-panel layout ──────────────────────────────────────────────── */
+    .panels {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      background: #2d3147;
+      overflow: hidden;
+    }
+    .panel {
+      background: #0f1117;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-label {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #64748b;
+      background: #141722;
+      border-bottom: 1px solid #2d3147;
+      flex-shrink: 0;
+    }
+    .panel canvas {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .panel-placeholder {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #2d3147;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>MiDaS Depth Estimation → 3-D Point Cloud</h1>
+    <p>Drag an image to see relative depth and unprojected 3-D points (top-down X-Z view)</p>
+  </div>
+</header>
+
+<div class="controls">
+  <!-- File drop -->
+  <div id="drop-zone" role="button" tabindex="0" aria-label="Drop image here or click to browse">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="17 8 12 3 7 8"/>
+      <line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    Drop image here or click to browse
+    <input type="file" id="file-input" accept="image/*" />
+  </div>
+
+  <!-- Focal length -->
+  <div class="ctrl-group">
+    <label>Focal Length (px)</label>
+    <div class="row">
+      <input type="range" id="focal-slider" min="100" max="2000" step="10" value="500" />
+      <span class="val" id="focal-val">500</span>
+    </div>
+  </div>
+
+  <!-- Depth scale -->
+  <div class="ctrl-group">
+    <label>Depth Scale (m)</label>
+    <div class="row">
+      <input type="range" id="scale-slider" min="0.5" max="20" step="0.5" value="5" />
+      <span class="val" id="scale-val">5.0</span>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="run-btn" disabled>Run</button>
+  <button class="btn btn-secondary" id="load-model-btn">Load MiDaS Model</button>
+</div>
+
+<div id="status">Ready — drop an image to start.</div>
+
+<div id="stats">
+  Points: <span id="stat-points">—</span>
+  &nbsp;|&nbsp; Depth min: <span id="stat-dmin">—</span> m
+  &nbsp;|&nbsp; Depth max: <span id="stat-dmax">—</span> m
+</div>
+
+<div class="panels">
+  <div class="panel">
+    <div class="panel-label">Original Image</div>
+    <canvas id="canvas-original"></canvas>
+    <div class="panel-placeholder" id="ph-original">No image loaded</div>
+  </div>
+  <div class="panel">
+    <div class="panel-label">MiDaS Depth Map (blue = far, red = close)</div>
+    <canvas id="canvas-depth"></canvas>
+    <div class="panel-placeholder" id="ph-depth">Waiting for image</div>
+  </div>
+  <div class="panel">
+    <div class="panel-label">3-D Scatter — Top-down X-Z Plane</div>
+    <canvas id="canvas-3d"></canvas>
+    <div class="panel-placeholder" id="ph-3d">Waiting for depth</div>
+  </div>
+</div>
+
+<script type="module">
+// ---------------------------------------------------------------------------
+// Imports — dynamic so Vite tree-shakes unused paths
+// ---------------------------------------------------------------------------
+
+// We import directly from the source TS (Vite handles transpilation).
+// Deliberately avoid the batch-pipeline wrapper to keep this demo self-contained.
+import { MASt3RNode } from './josh/nodes/mast3r.node.ts';
+
+// ---------------------------------------------------------------------------
+// DOM refs
+// ---------------------------------------------------------------------------
+
+const dropZone      = /** @type {HTMLDivElement}     */ (document.getElementById('drop-zone'));
+const fileInput     = /** @type {HTMLInputElement}   */ (document.getElementById('file-input'));
+const focalSlider   = /** @type {HTMLInputElement}   */ (document.getElementById('focal-slider'));
+const focalVal      = /** @type {HTMLSpanElement}    */ (document.getElementById('focal-val'));
+const scaleSlider   = /** @type {HTMLInputElement}   */ (document.getElementById('scale-slider'));
+const scaleVal      = /** @type {HTMLSpanElement}    */ (document.getElementById('scale-val'));
+const runBtn        = /** @type {HTMLButtonElement}  */ (document.getElementById('run-btn'));
+const loadModelBtn  = /** @type {HTMLButtonElement}  */ (document.getElementById('load-model-btn'));
+const statusEl      = /** @type {HTMLDivElement}     */ (document.getElementById('status'));
+
+const canvasOrig    = /** @type {HTMLCanvasElement}  */ (document.getElementById('canvas-original'));
+const canvasDepth   = /** @type {HTMLCanvasElement}  */ (document.getElementById('canvas-depth'));
+const canvas3d      = /** @type {HTMLCanvasElement}  */ (document.getElementById('canvas-3d'));
+
+const phOrig  = document.getElementById('ph-original');
+const phDepth = document.getElementById('ph-depth');
+const ph3d    = document.getElementById('ph-3d');
+
+const statPoints = document.getElementById('stat-points');
+const statDmin   = document.getElementById('stat-dmin');
+const statDmax   = document.getElementById('stat-dmax');
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const node = new MASt3RNode('./assets/models/midas-v2.1-small-256.onnx', 500);
+
+/** @type {ImageData | null} */
+let currentImageData = null;
+
+// ---------------------------------------------------------------------------
+// Slider live-update
+// ---------------------------------------------------------------------------
+
+focalSlider.addEventListener('input', () => {
+  const f = parseInt(focalSlider.value, 10);
+  focalVal.textContent = String(f);
+  node.setFocalLength(f);
+  if (currentImageData) scheduleReprocess();
+});
+
+scaleSlider.addEventListener('input', () => {
+  const s = parseFloat(scaleSlider.value).toFixed(1);
+  scaleVal.textContent = s;
+  if (currentImageData) scheduleReprocess();
+});
+
+let reprocessTimer = null;
+function scheduleReprocess() {
+  clearTimeout(reprocessTimer);
+  reprocessTimer = setTimeout(() => runPipeline(), 200);
+}
+
+// ---------------------------------------------------------------------------
+// File drop / input
+// ---------------------------------------------------------------------------
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer?.files[0];
+  if (file && file.type.startsWith('image/')) loadFile(file);
+});
+
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files?.[0];
+  if (file) loadFile(file);
+});
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      // Draw onto canvas-original at 256×256
+      const W = 256, H = 256;
+      canvasOrig.width  = W;
+      canvasOrig.height = H;
+      const ctx = canvasOrig.getContext('2d');
+      ctx.drawImage(img, 0, 0, W, H);
+      currentImageData = ctx.getImageData(0, 0, W, H);
+
+      phOrig.style.display = 'none';
+      canvasOrig.style.display = 'block';
+      runBtn.disabled = false;
+      setStatus(`Image loaded (${img.naturalWidth}×${img.naturalHeight}) → resized to 256×256`);
+      runPipeline();
+    };
+    img.src = /** @type {string} */ (reader.result);
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---------------------------------------------------------------------------
+// Load model button
+// ---------------------------------------------------------------------------
+
+loadModelBtn.addEventListener('click', async () => {
+  loadModelBtn.disabled = true;
+  loadModelBtn.textContent = 'Loading…';
+  try {
+    await node.load(fraction => {
+      setStatus(`Downloading MiDaS model… ${Math.round(fraction * 100)}%`);
+    });
+    setStatus(node.isLoaded() ? 'MiDaS model loaded.' : 'Using synthetic depth fallback.');
+    loadModelBtn.textContent = node.isLoaded() ? 'Model Ready' : 'Fallback Active';
+    if (currentImageData) runPipeline();
+  } catch (e) {
+    console.error(e);
+    setStatus('Failed to load model — synthetic depth will be used.');
+    loadModelBtn.textContent = 'Load Failed (using fallback)';
+    loadModelBtn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Run button
+// ---------------------------------------------------------------------------
+
+runBtn.addEventListener('click', () => runPipeline());
+
+// ---------------------------------------------------------------------------
+// Main pipeline
+// ---------------------------------------------------------------------------
+
+let running = false;
+
+async function runPipeline() {
+  if (!currentImageData || running) return;
+  running = true;
+  runBtn.disabled = true;
+
+  try {
+    setStatus('Running MiDaS depth estimation…');
+
+    const depthScale = parseFloat(scaleSlider.value);
+
+    // Reuse the node's internal depth logic by calling process() with the
+    // same image twice (identical output expected for both frames).
+    const output = await node.process(currentImageData, currentImageData);
+
+    const W = output.width;
+    const H = output.height;
+    const pts3d = output.pts3d_1;
+    const N = H * W;
+
+    // ── Reconstruct metric depth from pts3d (Z is index 2 of each triple) ──
+    // Apply the user-chosen depth scale by extracting Z values and rescaling.
+    const baseScale = 5.0; // node default
+    const userScale = depthScale;
+    const scaleRatio = userScale / baseScale;
+
+    const depthZ = new Float32Array(N);
+    let dMin = Infinity, dMax = -Infinity, validCount = 0;
+    for (let i = 0; i < N; i++) {
+      const z = pts3d[i * 3 + 2] * scaleRatio;
+      depthZ[i] = z;
+      if (z > 0) {
+        if (z < dMin) dMin = z;
+        if (z > dMax) dMax = z;
+        validCount++;
+      }
+    }
+
+    // ── Render depth map (jet colormap) ─────────────────────────────────────
+    canvasDepth.width  = W;
+    canvasDepth.height = H;
+    const dCtx  = canvasDepth.getContext('2d');
+    const dImg  = dCtx.createImageData(W, H);
+    const dData = dImg.data;
+    const range = dMax - dMin || 1;
+
+    for (let i = 0; i < N; i++) {
+      const z = depthZ[i];
+      let r = 0, g = 0, b = 0;
+      if (z > 0) {
+        // t=0 → close (red), t=1 → far (blue)  — jet colormap
+        const t = (z - dMin) / range;
+        [r, g, b] = jetColormap(t);
+      }
+      dData[i * 4]     = r;
+      dData[i * 4 + 1] = g;
+      dData[i * 4 + 2] = b;
+      dData[i * 4 + 3] = 255;
+    }
+    dCtx.putImageData(dImg, 0, 0);
+    phDepth.style.display = 'none';
+    canvasDepth.style.display = 'block';
+
+    // ── Render top-down scatter (X-Z plane) ─────────────────────────────────
+    const S = 512; // canvas size for the scatter
+    canvas3d.width  = S;
+    canvas3d.height = S;
+    const sCtx = canvas3d.getContext('2d');
+    sCtx.fillStyle = '#0f1117';
+    sCtx.fillRect(0, 0, S, S);
+
+    // Find X range for mapping to canvas
+    let xMin = Infinity, xMax = -Infinity;
+    for (let i = 0; i < N; i++) {
+      const x = pts3d[i * 3] * scaleRatio;
+      if (depthZ[i] > 0) {
+        if (x < xMin) xMin = x;
+        if (x > xMax) xMax = x;
+      }
+    }
+    const xRange = xMax - xMin || 1;
+
+    // Draw axes
+    sCtx.strokeStyle = '#2d3147';
+    sCtx.lineWidth = 1;
+    sCtx.beginPath();
+    sCtx.moveTo(S / 2, 0); sCtx.lineTo(S / 2, S); // vertical = Z axis
+    sCtx.moveTo(0, S / 2); sCtx.lineTo(S, S / 2); // horizontal = X axis
+    sCtx.stroke();
+
+    // Axis labels
+    sCtx.fillStyle = '#4a5568';
+    sCtx.font = '11px system-ui';
+    sCtx.fillText('← X →', 4, S / 2 - 4);
+    sCtx.fillText('Z ↑', S / 2 + 4, 14);
+
+    // Scatter points (subsample for performance)
+    const step = Math.max(1, Math.floor(N / 8000));
+    for (let i = 0; i < N; i += step) {
+      const z = depthZ[i];
+      if (z <= 0) continue;
+
+      const x = pts3d[i * 3] * scaleRatio;
+      const t = (z - dMin) / range;
+      const [pr, pg, pb] = jetColormap(t);
+
+      // Map: X → horizontal [0, S], Z → vertical inverted [S, 0]
+      const px = ((x - xMin) / xRange) * (S - 20) + 10;
+      const pz = S - (((z - dMin) / range) * (S - 20) + 10);
+
+      sCtx.fillStyle = `rgb(${pr},${pg},${pb})`;
+      sCtx.fillRect(px - 1, pz - 1, 2, 2);
+    }
+
+    ph3d.style.display = 'none';
+    canvas3d.style.display = 'block';
+
+    // ── Stats ────────────────────────────────────────────────────────────────
+    statPoints.textContent = validCount.toLocaleString();
+    statDmin.textContent   = isFinite(dMin) ? dMin.toFixed(2) : '—';
+    statDmax.textContent   = isFinite(dMax) ? dMax.toFixed(2) : '—';
+
+    const src = node.isLoaded() ? 'MiDaS ONNX' : 'synthetic gradient fallback';
+    setStatus(`Done — ${validCount.toLocaleString()} valid points using ${src}.`);
+  } catch (e) {
+    console.error(e);
+    setStatus(`Error: ${e.message}`);
+  } finally {
+    running = false;
+    runBtn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Jet colormap  t ∈ [0, 1]  →  [r, g, b] ∈ [0, 255]
+// t=0 → blue (far), t=1 → red (close)
+// ---------------------------------------------------------------------------
+
+function jetColormap(t) {
+  // Standard jet: blue → cyan → green → yellow → red
+  const r = clamp255(1.5 - Math.abs(4 * t - 3));
+  const g = clamp255(1.5 - Math.abs(4 * t - 2));
+  const b = clamp255(1.5 - Math.abs(4 * t - 1));
+  return [r, g, b];
+}
+
+function clamp255(v) {
+  return Math.round(Math.max(0, Math.min(1, v)) * 255);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function setStatus(msg) {
+  statusEl.textContent = msg;
+}
+</script>
+</body>
+</html>

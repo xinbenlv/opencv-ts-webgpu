@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JOSH TF.js Optimizer Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f13; color: #e0e0e0; }
+
+    .tabs { display: flex; border-bottom: 2px solid #333; }
+    .tab-btn {
+      padding: 12px 28px; cursor: pointer; background: none;
+      border: none; color: #888; font-size: 15px; transition: color .2s;
+    }
+    .tab-btn:hover { color: #ccc; }
+    .tab-btn.active { color: #6ec6ff; border-bottom: 2px solid #6ec6ff; margin-bottom: -2px; }
+
+    .tab-panel { display: none; padding: 24px; max-width: 900px; margin: 0 auto; }
+    .tab-panel.active { display: block; }
+
+    h2 { margin-bottom: 16px; color: #aad4ff; font-size: 18px; }
+    p  { color: #999; margin-bottom: 12px; font-size: 13px; line-height: 1.5; }
+
+    canvas { background: #1a1a22; border: 1px solid #333; border-radius: 6px; display: block; }
+
+    .controls { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
+    .ctrl-group { display: flex; flex-direction: column; gap: 4px; }
+    .ctrl-group label { font-size: 12px; color: #888; }
+    .ctrl-group input[type=range] { width: 180px; accent-color: #6ec6ff; }
+    .val-display { font-size: 12px; color: #6ec6ff; }
+
+    button.run-btn {
+      padding: 10px 28px; background: #6ec6ff; color: #0f0f13;
+      border: none; border-radius: 6px; font-size: 14px; font-weight: bold;
+      cursor: pointer; transition: opacity .2s;
+    }
+    button.run-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    .loss-status { font-size: 13px; color: #6ec6ff; margin: 8px 0; min-height: 20px; }
+    .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; margin: 12px 0; }
+    .bar-col { display: flex; flex-direction: column; align-items: center; flex: 1; height: 100%; justify-content: flex-end; }
+    .bar { width: 100%; background: #6ec6ff; border-radius: 3px 3px 0 0; transition: height .3s; min-height: 2px; }
+    .bar-label { font-size: 11px; color: #888; margin-top: 4px; }
+    .bar-val { font-size: 10px; color: #6ec6ff; margin-top: 2px; }
+
+    .row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="forward">SMPL Forward</button>
+  <button class="tab-btn" data-tab="losses">Loss Functions</button>
+  <button class="tab-btn" data-tab="optimizer">Optimizer</button>
+</div>
+
+<!-- ===== Tab 1: SMPL Forward ===== -->
+<div id="tab-forward" class="tab-panel active">
+  <h2>Tab 1 — SMPL Forward Pass</h2>
+  <p>Adjust joint angles to see how the synthetic skeleton deforms. Vertices move in real time via the tf.js differentiable forward pass (synthetic ~50 vertex model).</p>
+  <div class="row">
+    <div>
+      <canvas id="canvasFwd" width="380" height="420"></canvas>
+    </div>
+    <div>
+      <div class="controls">
+        <div class="ctrl-group">
+          <label>Hip Flexion (joint 1)</label>
+          <input type="range" id="hipAngle" min="-1.5" max="1.5" step="0.02" value="0" />
+          <span class="val-display" id="hipVal">0.00 rad</span>
+        </div>
+        <div class="ctrl-group">
+          <label>Knee Flexion (joint 4)</label>
+          <input type="range" id="kneeAngle" min="0" max="2.5" step="0.02" value="0" />
+          <span class="val-display" id="kneeVal">0.00 rad</span>
+        </div>
+        <div class="ctrl-group">
+          <label>Shoulder Abduction (joint 16)</label>
+          <input type="range" id="shoulderAngle" min="-1.5" max="1.5" step="0.02" value="0" />
+          <span class="val-display" id="shoulderVal">0.00 rad</span>
+        </div>
+        <div class="ctrl-group">
+          <label>Beta 0 (body width)</label>
+          <input type="range" id="beta0" min="-3" max="3" step="0.1" value="0" />
+          <span class="val-display" id="beta0Val">0.00</span>
+        </div>
+      </div>
+      <p style="margin-top:12px; font-size:12px;">Green dots = joints &nbsp;|&nbsp; Cyan lines = bones &nbsp;|&nbsp; Grey dots = mesh samples</p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Tab 2: Loss Functions ===== -->
+<div id="tab-losses" class="tab-panel">
+  <h2>Tab 2 — Loss Functions</h2>
+  <p>Interactive bar chart of all 6 JOSH loss terms for a synthetic scene. Adjust weights and pose offsets below.</p>
+  <div class="row">
+    <div>
+      <canvas id="canvasLoss" width="380" height="240"></canvas>
+      <div class="bar-chart" id="barChart">
+        <div class="bar-col"><div class="bar" id="bar-l3d" style="height:50%"></div><div class="bar-label">L_3D</div><div class="bar-val" id="bv-l3d">0</div></div>
+        <div class="bar-col"><div class="bar" id="bar-l2d" style="height:50%"></div><div class="bar-label">L_2D</div><div class="bar-val" id="bv-l2d">0</div></div>
+        <div class="bar-col"><div class="bar" id="bar-lc1" style="height:50%"></div><div class="bar-label">L_c1</div><div class="bar-val" id="bv-lc1">0</div></div>
+        <div class="bar-col"><div class="bar" id="bar-lc2" style="height:50%"></div><div class="bar-label">L_c2</div><div class="bar-val" id="bv-lc2">0</div></div>
+        <div class="bar-col"><div class="bar" id="bar-lp" style="height:50%"></div><div class="bar-label">L_p</div><div class="bar-val" id="bv-lp">0</div></div>
+        <div class="bar-col"><div class="bar" id="bar-ls" style="height:50%"></div><div class="bar-label">L_s</div><div class="bar-val" id="bv-ls">0</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="controls">
+        <div class="ctrl-group">
+          <label>Pose offset (all joints)</label>
+          <input type="range" id="poseOffset" min="0" max="1" step="0.01" value="0.3" />
+          <span class="val-display" id="poseOffsetVal">0.30</span>
+        </div>
+        <div class="ctrl-group">
+          <label>w_3D</label>
+          <input type="range" id="w3d" min="0" max="5" step="0.1" value="1" />
+          <span class="val-display" id="w3dVal">1.0</span>
+        </div>
+        <div class="ctrl-group">
+          <label>w_2D</label>
+          <input type="range" id="w2d" min="0" max="5" step="0.1" value="1" />
+          <span class="val-display" id="w2dVal">1.0</span>
+        </div>
+        <div class="ctrl-group">
+          <label>w_p (prior)</label>
+          <input type="range" id="wp" min="0" max="20" step="0.5" value="10" />
+          <span class="val-display" id="wpVal">10.0</span>
+        </div>
+        <div class="ctrl-group">
+          <label>w_s (smooth)</label>
+          <input type="range" id="ws" min="0" max="5" step="0.1" value="1" />
+          <span class="val-display" id="wsVal">1.0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Tab 3: Optimizer ===== -->
+<div id="tab-optimizer" class="tab-panel">
+  <h2>Tab 3 — Optimizer Demo</h2>
+  <p>Synthetic scene: the optimizer finds the correct 2-D keypoint projection over 700 iterations (500 stage-1, 200 stage-2). Live loss curve below.</p>
+  <div class="row">
+    <div>
+      <canvas id="canvasOpt" width="380" height="300"></canvas>
+      <div class="loss-status" id="optStatus">Click "Run 700 iters" to start.</div>
+      <button class="run-btn" id="btnRun">Run 700 iters</button>
+    </div>
+    <div style="flex:1;">
+      <canvas id="canvasCurve" width="380" height="200"></canvas>
+      <p style="margin-top:8px; font-size:12px;">Loss curve — blue=total, orange=L_2D, green=L_p</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+// ============================================================
+// Synthetic SMPL-like skeleton (no real model required)
+// ============================================================
+
+// Simplified joint positions (T-pose, 24 joints, meters)
+const TPOSE_JOINTS = new Float32Array([
+   0,    0.9,  0,   // 0  pelvis
+   0.10, 0.82, 0,   // 1  l_hip
+  -0.10, 0.82, 0,   // 2  r_hip
+   0,    1.05, 0,   // 3  spine1
+   0.10, 0.45, 0,   // 4  l_knee
+  -0.10, 0.45, 0,   // 5  r_knee
+   0,    1.20, 0,   // 6  spine2
+   0.10, 0.08, 0,   // 7  l_ankle
+  -0.10, 0.08, 0,   // 8  r_ankle
+   0,    1.35, 0,   // 9  spine3
+   0.10, 0.00, 0,   // 10 l_foot
+  -0.10, 0.00, 0,   // 11 r_foot
+   0,    1.50, 0,   // 12 neck
+   0.18, 1.35, 0,   // 13 l_collar
+  -0.18, 1.35, 0,   // 14 r_collar
+   0,    1.70, 0,   // 15 head
+   0.18, 1.20, 0,   // 16 l_shoulder
+  -0.18, 1.20, 0,   // 17 r_shoulder
+   0.42, 1.20, 0,   // 18 l_elbow
+  -0.42, 1.20, 0,   // 19 r_elbow
+   0.65, 1.20, 0,   // 20 l_wrist
+  -0.65, 1.20, 0,   // 21 r_wrist
+   0.72, 1.20, 0,   // 22 l_hand
+  -0.72, 1.20, 0,   // 23 r_hand
+]);
+
+// SMPL kinematic parents (index 0 = -1 for root)
+const PARENTS = [-1,0,0,0,1,2,3,4,5,6,7,8,9,9,9,12,13,14,16,17,18,19,20,21];
+
+// Bones to draw (pairs of joint indices)
+const BONES = [
+  [0,1],[0,2],[0,3],[1,4],[2,5],[3,6],[4,7],[5,8],[6,9],[7,10],[8,11],
+  [9,12],[9,13],[9,14],[12,15],[13,16],[14,17],[16,18],[17,19],[18,20],[19,21],[20,22],[21,23]
+];
+
+// ============================================================
+// Math helpers (pure JS)
+// ============================================================
+
+function rodriguesJS(ax, ay, az) {
+  const theta2 = ax*ax + ay*ay + az*az;
+  const theta = Math.sqrt(theta2 + 1e-12);
+  const sinc = Math.sin(theta) / (theta + 1e-12);
+  const cosc = (1 - Math.cos(theta)) / (theta2 + 1e-12);
+  const wxwy = ax*ay, wxwz = ax*az, wywz = ay*az;
+  return [
+    1 + cosc*(-(ay*ay+az*az)),  cosc*wxwy - sinc*az,        cosc*wxwz + sinc*ay,
+    cosc*wxwy + sinc*az,        1 + cosc*(-(ax*ax+az*az)),  cosc*wywz - sinc*ax,
+    cosc*wxwz - sinc*ay,        cosc*wywz + sinc*ax,        1 + cosc*(-(ax*ax+ay*ay))
+  ];
+}
+
+function matMul3(A, B) { // 3x3 arrays
+  const C = new Array(9);
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+    C[r*3+c] = A[r*3+0]*B[0*3+c] + A[r*3+1]*B[1*3+c] + A[r*3+2]*B[2*3+c];
+  }
+  return C;
+}
+
+function makeG(R, t) { // 4x4 flat array
+  return [
+    R[0],R[1],R[2],t[0],
+    R[3],R[4],R[5],t[1],
+    R[6],R[7],R[8],t[2],
+    0,   0,   0,   1
+  ];
+}
+
+function matMul4(A, B) { // 4x4 flat arrays
+  const C = new Array(16).fill(0);
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+    for (let k = 0; k < 4; k++) C[r*4+c] += A[r*4+k]*B[k*4+c];
+  }
+  return C;
+}
+
+// Forward kinematics — returns joint positions [24][3]
+function fk(pose, beta0Scale = 1) {
+  const joints = [];
+  for (let j = 0; j < 24; j++) {
+    joints.push([
+      TPOSE_JOINTS[j*3]   * (j === 13 || j === 16 || j === 18 || j === 20 || j === 22 ? (1 + beta0Scale*0.04) : 1),
+      TPOSE_JOINTS[j*3+1],
+      TPOSE_JOINTS[j*3+2]
+    ]);
+  }
+
+  const G = new Array(24);
+  for (let j = 0; j < 24; j++) {
+    const ax = pose[j*3], ay = pose[j*3+1], az = pose[j*3+2];
+    const R = rodriguesJS(ax, ay, az);
+    const p = PARENTS[j];
+    if (p < 0) {
+      G[j] = makeG(R, joints[j]);
+    } else {
+      const relT = [
+        joints[j][0] - joints[p][0],
+        joints[j][1] - joints[p][1],
+        joints[j][2] - joints[p][2],
+      ];
+      const Tlocal = makeG(R, relT);
+      G[j] = matMul4(G[p], Tlocal);
+    }
+  }
+
+  return G.map(g => [g[3], g[7], g[11]]); // x, y, z from last column
+}
+
+// Project [x,y,z] → [u,v] with focal length
+function project(jpos, fl, cx, cy) {
+  const z = jpos[2] + 1e-6;
+  return [fl * jpos[0] / z + cx, fl * jpos[1] / z + cy];
+}
+
+// ============================================================
+// Tab switching
+// ============================================================
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ============================================================
+// Tab 1: SMPL Forward
+// ============================================================
+(function setupForward() {
+  const canvas = document.getElementById('canvasFwd');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const FL = 600, CX = W/2, CY = H/2 + 60;
+
+  const sliders = {
+    hip:      { el: document.getElementById('hipAngle'),      val: document.getElementById('hipVal'),      joint: 1, axis: 0 },
+    knee:     { el: document.getElementById('kneeAngle'),     val: document.getElementById('kneeVal'),     joint: 4, axis: 0 },
+    shoulder: { el: document.getElementById('shoulderAngle'), val: document.getElementById('shoulderVal'), joint: 16, axis: 2 },
+  };
+  const beta0El  = document.getElementById('beta0');
+  const beta0Val = document.getElementById('beta0Val');
+
+  function getPose() {
+    const pose = new Float32Array(72);
+    for (const [, s] of Object.entries(sliders)) {
+      const v = parseFloat(s.el.value);
+      pose[s.joint * 3 + s.axis] = v;
+    }
+    return pose;
+  }
+
+  function draw() {
+    const pose = getPose();
+    const b0 = parseFloat(beta0El.value);
+    const joints = fk(pose, b0);
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Draw bones
+    ctx.strokeStyle = '#4a9eff';
+    ctx.lineWidth = 2;
+    for (const [a, b] of BONES) {
+      const [ua, va] = project(joints[a], FL, CX, CY);
+      const [ub, vb] = project(joints[b], FL, CX, CY);
+      ctx.beginPath();
+      ctx.moveTo(ua, va);
+      ctx.lineTo(ub, vb);
+      ctx.stroke();
+    }
+
+    // Draw joints
+    ctx.fillStyle = '#6ec6ff';
+    for (const j of joints) {
+      const [u, v] = project(j, FL, CX, CY);
+      ctx.beginPath();
+      ctx.arc(u, v, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Draw synthetic vertices (a few points per limb)
+    ctx.fillStyle = '#555';
+    for (const j of joints) {
+      for (let dx = -0.03; dx <= 0.03; dx += 0.03) {
+        for (let dy = -0.03; dy <= 0.03; dy += 0.03) {
+          const [u, v] = project([j[0]+dx, j[1]+dy, j[2]], FL, CX, CY);
+          ctx.beginPath();
+          ctx.arc(u, v, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  Object.entries(sliders).forEach(([key, s]) => {
+    s.el.addEventListener('input', () => {
+      s.val.textContent = parseFloat(s.el.value).toFixed(2) + ' rad';
+      draw();
+    });
+  });
+  beta0El.addEventListener('input', () => {
+    beta0Val.textContent = parseFloat(beta0El.value).toFixed(2);
+    draw();
+  });
+
+  draw();
+})();
+
+// ============================================================
+// Tab 2: Loss Functions
+// ============================================================
+(function setupLosses() {
+  const canvas = document.getElementById('canvasLoss');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const FL = 500, CX = W/2, CY = H/2 + 40;
+
+  function computeAllLosses(poseOffset, w3D, w2D, wp, ws) {
+    const pose = new Float32Array(72);
+    const prior = new Float32Array(72);
+    // Set offset from prior
+    for (let i = 0; i < 72; i++) { pose[i] = poseOffset; prior[i] = 0; }
+
+    const joints = fk(pose);
+    const tPoseJoints = fk(new Float32Array(72));
+
+    // L_p = wp * sum(||pose - prior||^2)
+    let lp = 0;
+    for (let i = 0; i < 72; i++) lp += (pose[i] - prior[i]) ** 2;
+    lp *= wp;
+
+    // L_2D = sum_k conf * ||(u_k - proj_k)||^2
+    // Synthetic keypoints: project T-pose joints as targets
+    let l2d = 0;
+    for (let k = 0; k < 24; k++) {
+      const [uT, vT] = project(tPoseJoints[k], FL, CX, CY);
+      const [uP, vP] = project(joints[k], FL, CX, CY);
+      l2d += (uT - uP) ** 2 + (vT - vP) ** 2;
+    }
+    l2d *= w2D;
+
+    // L_3D = w3D * mean(||joint - tpose_joint||^2)
+    let l3d = 0;
+    for (let k = 0; k < 24; k++) {
+      l3d += (joints[k][0] - tPoseJoints[k][0])**2 +
+             (joints[k][1] - tPoseJoints[k][1])**2 +
+             (joints[k][2] - tPoseJoints[k][2])**2;
+    }
+    l3d = l3d / 24 * w3D;
+
+    // L_c1 = contact scale (feet joints 7,8 above floor y=0)
+    const footIdxs = [7, 8, 10, 11];
+    const floorY = Math.min(...footIdxs.map(k => joints[k][1]));
+    let lc1 = 0;
+    for (const k of footIdxs) {
+      const dy = joints[k][1] - floorY;
+      lc1 += Math.max(0, dy * dy) ** 2;
+    }
+
+    // L_c2 = contact static (feet moved vs T-pose)
+    let lc2 = 0;
+    const deltaC2 = 0.1;
+    for (const k of footIdxs) {
+      const dist2 = (joints[k][0]-tPoseJoints[k][0])**2 +
+                    (joints[k][1]-tPoseJoints[k][1])**2 +
+                    (joints[k][2]-tPoseJoints[k][2])**2;
+      lc2 += Math.max(0, dist2 - deltaC2 * deltaC2);
+    }
+    lc2 *= 20;
+
+    // L_s = smooth = ws * sum ||joints_t - joints_{t-1}||^2 (prev = T-pose)
+    let ls = 0;
+    for (let k = 0; k < 24; k++) {
+      ls += (joints[k][0]-tPoseJoints[k][0])**2 +
+            (joints[k][1]-tPoseJoints[k][1])**2 +
+            (joints[k][2]-tPoseJoints[k][2])**2;
+    }
+    ls *= ws;
+
+    return { l3d, l2d, lc1, lc2, lp, ls };
+  }
+
+  function drawScene(joints) {
+    ctx.clearRect(0, 0, W, H);
+    // Floor line
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H - 20); ctx.lineTo(W, H - 20); ctx.stroke();
+
+    ctx.strokeStyle = '#4a9eff'; ctx.lineWidth = 2;
+    for (const [a, b] of BONES) {
+      const [ua, va] = project(joints[a], FL, CX, CY);
+      const [ub, vb] = project(joints[b], FL, CX, CY);
+      ctx.beginPath(); ctx.moveTo(ua, va); ctx.lineTo(ub, vb); ctx.stroke();
+    }
+    ctx.fillStyle = '#6ec6ff';
+    for (const j of joints) {
+      const [u, v] = project(j, FL, CX, CY);
+      ctx.beginPath(); ctx.arc(u, v, 4, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  function updateBars(losses) {
+    const vals = [losses.l3d, losses.l2d, losses.lc1, losses.lc2, losses.lp, losses.ls];
+    const ids = ['l3d','l2d','lc1','lc2','lp','ls'];
+    const mx = Math.max(...vals, 1);
+    for (let i = 0; i < ids.length; i++) {
+      const pct = (vals[i] / mx * 95).toFixed(1);
+      document.getElementById('bar-' + ids[i]).style.height = pct + '%';
+      document.getElementById('bv-' + ids[i]).textContent = vals[i].toFixed(2);
+    }
+  }
+
+  function update() {
+    const poseOffset = parseFloat(document.getElementById('poseOffset').value);
+    const w3D = parseFloat(document.getElementById('w3d').value);
+    const w2D = parseFloat(document.getElementById('w2d').value);
+    const wp  = parseFloat(document.getElementById('wp').value);
+    const ws  = parseFloat(document.getElementById('ws').value);
+
+    document.getElementById('poseOffsetVal').textContent = poseOffset.toFixed(2);
+    document.getElementById('w3dVal').textContent = w3D.toFixed(1);
+    document.getElementById('w2dVal').textContent = w2D.toFixed(1);
+    document.getElementById('wpVal').textContent  = wp.toFixed(1);
+    document.getElementById('wsVal').textContent  = ws.toFixed(1);
+
+    const pose = new Float32Array(72);
+    for (let i = 0; i < 72; i++) pose[i] = poseOffset;
+    drawScene(fk(pose));
+
+    const losses = computeAllLosses(poseOffset, w3D, w2D, wp, ws);
+    updateBars(losses);
+  }
+
+  ['poseOffset','w3d','w2d','wp','ws'].forEach(id =>
+    document.getElementById(id).addEventListener('input', update));
+
+  update();
+})();
+
+// ============================================================
+// Tab 3: Optimizer
+// ============================================================
+(function setupOptimizer() {
+  const canvasOpt  = document.getElementById('canvasOpt');
+  const canvasCurve = document.getElementById('canvasCurve');
+  const ctxOpt   = canvasOpt.getContext('2d');
+  const ctxCurve = canvasCurve.getContext('2d');
+  const WO = canvasOpt.width, HO = canvasOpt.height;
+  const WC = canvasCurve.width, HC = canvasCurve.height;
+  const FL = 500, CX = WO/2, CY = HO/2 + 30;
+  const statusEl = document.getElementById('optStatus');
+  const btnRun   = document.getElementById('btnRun');
+
+  // Target joints = T-pose (the optimizer tries to match these 2D projections)
+  const targetJoints = fk(new Float32Array(72));
+  const targetKp2d = targetJoints.map(j => project(j, FL, CX, CY));
+
+  // Current pose state (starts scrambled)
+  let currentPose = new Float32Array(72);
+  let lossHistory = [];
+  let l2dHistory  = [];
+  let lpHistory   = [];
+
+  // Simple JS gradient-free optimizer (Adam on pose only, L2 projected loss)
+  // (No real tf.js import needed for this demo — pure JS for browser compat)
+  function computeProjectedL2(pose) {
+    const joints = fk(pose);
+    let l2d = 0;
+    for (let k = 0; k < 24; k++) {
+      const [u, v] = project(joints[k], FL, CX, CY);
+      l2d += (targetKp2d[k][0] - u)**2 + (targetKp2d[k][1] - v)**2;
+    }
+    return l2d / 24;
+  }
+
+  function computeLpJS(pose) {
+    let lp = 0;
+    for (let i = 0; i < 72; i++) lp += pose[i]**2;
+    return 10 * lp;
+  }
+
+  // Finite-difference gradient
+  function fdGrad(pose, eps = 0.005) {
+    const grad = new Float32Array(72);
+    const f0 = computeProjectedL2(pose) + computeLpJS(pose);
+    for (let i = 0; i < 72; i++) {
+      const orig = pose[i];
+      pose[i] = orig + eps;
+      grad[i] = (computeProjectedL2(pose) + computeLpJS(pose) - f0) / eps;
+      pose[i] = orig;
+    }
+    return { grad, loss: f0 };
+  }
+
+  let running = false;
+  let m  = new Float32Array(72);
+  let v2 = new Float32Array(72);
+  let t  = 0;
+
+  function drawScene(pose, title) {
+    const joints = fk(pose);
+    ctxOpt.clearRect(0, 0, WO, HO);
+    ctxOpt.fillStyle = '#1a1a22';
+    ctxOpt.fillRect(0, 0, WO, HO);
+
+    // Target skeleton (faint)
+    ctxOpt.strokeStyle = '#336677'; ctxOpt.lineWidth = 1.5;
+    for (const [a, b] of BONES) {
+      const [ua, va] = project(targetJoints[a], FL, CX, CY);
+      const [ub, vb] = project(targetJoints[b], FL, CX, CY);
+      ctxOpt.beginPath(); ctxOpt.moveTo(ua, va); ctxOpt.lineTo(ub, vb); ctxOpt.stroke();
+    }
+
+    // Current skeleton
+    ctxOpt.strokeStyle = '#ff8844'; ctxOpt.lineWidth = 2;
+    for (const [a, b] of BONES) {
+      const [ua, va] = project(joints[a], FL, CX, CY);
+      const [ub, vb] = project(joints[b], FL, CX, CY);
+      ctxOpt.beginPath(); ctxOpt.moveTo(ua, va); ctxOpt.lineTo(ub, vb); ctxOpt.stroke();
+    }
+    ctxOpt.fillStyle = '#ff8844';
+    for (const j of joints) {
+      const [u, v] = project(j, FL, CX, CY);
+      ctxOpt.beginPath(); ctxOpt.arc(u, v, 4, 0, Math.PI*2); ctxOpt.fill();
+    }
+
+    ctxOpt.fillStyle = '#888'; ctxOpt.font = '12px system-ui';
+    ctxOpt.fillText(title, 10, 18);
+    ctxOpt.fillStyle = '#336677'; ctxOpt.fillText('Target (teal) vs Current (orange)', 10, 34);
+  }
+
+  function drawCurve() {
+    ctxCurve.clearRect(0, 0, WC, HC);
+    ctxCurve.fillStyle = '#1a1a22'; ctxCurve.fillRect(0, 0, WC, HC);
+
+    const maxLoss = Math.max(...lossHistory, 1);
+    const n = lossHistory.length;
+    if (n < 2) return;
+
+    function drawLine(data, color) {
+      ctxCurve.strokeStyle = color; ctxCurve.lineWidth = 1.5;
+      ctxCurve.beginPath();
+      for (let i = 0; i < data.length; i++) {
+        const x = (i / (n - 1)) * (WC - 20) + 10;
+        const y = HC - 10 - (data[i] / maxLoss) * (HC - 20);
+        i === 0 ? ctxCurve.moveTo(x, y) : ctxCurve.lineTo(x, y);
+      }
+      ctxCurve.stroke();
+    }
+
+    drawLine(lossHistory, '#6ec6ff');
+    drawLine(l2dHistory,  '#ffa040');
+    drawLine(lpHistory,   '#80ff80');
+
+    ctxCurve.fillStyle = '#888'; ctxCurve.font = '11px system-ui';
+    ctxCurve.fillText(`iter ${t}/700  loss ${lossHistory[lossHistory.length-1].toFixed(1)}`, 10, HC - 2);
+  }
+
+  async function runOptimizer() {
+    if (running) return;
+    running = true;
+    btnRun.disabled = true;
+    lossHistory = []; l2dHistory = []; lpHistory = [];
+    m  = new Float32Array(72);
+    v2 = new Float32Array(72);
+    t  = 0;
+
+    // Start from a scrambled pose
+    currentPose = new Float32Array(72);
+    for (let i = 0; i < 72; i++) currentPose[i] = (Math.random() - 0.5) * 0.8;
+
+    const TOTAL = 700;
+    const LR1 = 0.07, LR2 = 0.014;
+    const beta1 = 0.9, beta2 = 0.999, eps = 1e-8;
+
+    function step() {
+      if (t >= TOTAL) {
+        statusEl.textContent = `Done. Final loss: ${lossHistory[lossHistory.length-1].toFixed(2)}`;
+        btnRun.disabled = false;
+        running = false;
+        return;
+      }
+
+      const lr = t < 500 ? LR1 : LR2;
+      const { grad, loss } = fdGrad(currentPose);
+      const l2d = computeProjectedL2(currentPose);
+      const lp  = computeLpJS(currentPose);
+
+      t++;
+      for (let i = 0; i < 72; i++) {
+        m[i]  = beta1 * m[i]  + (1 - beta1) * grad[i];
+        v2[i] = beta2 * v2[i] + (1 - beta2) * grad[i] * grad[i];
+        const mH = m[i]  / (1 - beta1**t);
+        const vH = v2[i] / (1 - beta2**t);
+        currentPose[i] -= lr * mH / (Math.sqrt(vH) + eps);
+      }
+
+      lossHistory.push(loss);
+      l2dHistory.push(l2d);
+      lpHistory.push(lp);
+
+      if (t % 10 === 0) {
+        statusEl.textContent = `Iter ${t}/700 — loss ${loss.toFixed(2)} (L_2D ${l2d.toFixed(2)}, L_p ${lp.toFixed(2)})`;
+        drawScene(currentPose, `Iter ${t}`);
+        drawCurve();
+      }
+
+      if (t % 25 === 0) {
+        setTimeout(step, 0);
+      } else {
+        step();
+      }
+    }
+
+    drawScene(currentPose, 'Initial (scrambled)');
+    statusEl.textContent = 'Running...';
+    setTimeout(step, 0);
+  }
+
+  btnRun.addEventListener('click', runOptimizer);
+  drawScene(new Float32Array(72), 'T-pose (target)');
+})();
+</script>
+</body>
+</html>

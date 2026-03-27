@@ -25,6 +25,8 @@ import { Pose2DNode, type Keypoint2D } from '../nodes/pose-2d.node.ts';
 import { detectContacts, type ContactResult } from '../utils/contact-detection.ts';
 import { MASt3RNode, type MASt3ROutput } from '../nodes/mast3r.node.ts';
 import { recoverFocalLength } from '../utils/focal-recovery.ts';
+import { runJOSHOptimizer } from '../tf/josh-optimizer.ts';
+import type { SMPLModelData } from '../models/smpl-loader-ui.ts';
 
 // ---------------------------------------------------------------------------
 // Re-export the cache result type so callers can import it from one place
@@ -172,12 +174,23 @@ export class BatchPipeline {
   private _mast3r: MASt3RNode | null = null;
   private _mast3rInitialized = false;
 
+  /** SMPL model data, set via setSmplModel() before processing. */
+  private _smplModel: SMPLModelData | null = null;
+
   private _segInitialized = false;
   private _poseInitialized = false;
 
   constructor(device: GPUDevice, onProgress?: (p: BatchProgress) => void) {
     this._device = device;
     this._onProgress = onProgress;
+  }
+
+  /**
+   * Provide the loaded SMPL model so Phase H can run the real tf.js optimizer.
+   * Must be called before process() for optimisation to be non-stub.
+   */
+  setSmplModel(model: SMPLModelData): void {
+    this._smplModel = model;
   }
 
   // -------------------------------------------------------------------------
@@ -458,7 +471,7 @@ export class BatchPipeline {
 
       if (signal?.aborted) break;
 
-      // ---- Phase H: JOSH optimisation (stub) ------------------------------
+      // ---- Phase H: JOSH optimisation (real tf.js optimizer when SMPL loaded) ---
       const totalIters = JOSH_CONFIG.stage1.iters + JOSH_CONFIG.stage2.iters; // 700
 
       for (let i = 0; i < frameContexts.length; i++) {
@@ -470,41 +483,111 @@ export class BatchPipeline {
 
         const phaseStartTime = performance.now();
 
-        ctx.joshParams = await stubJoshOptimize(
-          ctx,
-          camera,
-          totalIters,
-          (iterIndex, loss) => {
-            const elapsed = performance.now() - phaseStartTime;
-            const itersRemaining = totalIters - iterIndex;
-            const msPerIter = elapsed / Math.max(iterIndex, 1);
-            const etaMs = itersRemaining * msPerIter;
-            this._emit({
-              phase: 'optimize',
-              frameIndex: globalIdx,
-              totalFrames,
-              chunkIndex: chunkIdx,
-              totalChunks,
-              iterIndex,
-              loss,
-              etaMs,
-            });
-          },
-          signal,
-        );
+        let smplPose: Float32Array;
+        let smplShape: Float32Array;
+        let vertices: Float32Array | null = null;
+        let jointPositions: Float32Array = new Float32Array(JOSH_CONFIG.smplJointCount * 3);
+        let losses: Float32Array = new Float32Array(6);
 
-        const result: PerFrameResult = {
+        const onIter = (iterIndex: number, loss: number): void => {
+          const elapsed = performance.now() - phaseStartTime;
+          const itersRemaining = totalIters - iterIndex;
+          const msPerIter = elapsed / Math.max(iterIndex, 1);
+          const etaMs = itersRemaining * msPerIter;
+          this._emit({
+            phase: 'optimize',
+            frameIndex: globalIdx,
+            totalFrames,
+            chunkIndex: chunkIdx,
+            totalChunks,
+            iterIndex,
+            loss,
+            etaMs,
+          });
+        };
+
+        if (this._smplModel !== null) {
+          // Real tf.js optimizer path
+          const kp2d = ctx.pose2d !== null
+            ? (() => {
+                const arr = new Float32Array(JOSH_CONFIG.smplJointCount * 3);
+                for (let k = 0; k < Math.min(ctx.pose2d!.length, JOSH_CONFIG.smplJointCount); k++) {
+                  const kp = ctx.pose2d![k]!;
+                  arr[k * 3]     = kp.x;
+                  arr[k * 3 + 1] = kp.y;
+                  arr[k * 3 + 2] = kp.confidence;
+                }
+                return arr;
+              })()
+            : new Float32Array(JOSH_CONFIG.smplJointCount * 3);
+
+          const contactMaskArr = (() => {
+            const mask = new Uint8Array(JOSH_CONFIG.smplVertexCount);
+            if (ctx.contact !== null) {
+              for (const idx of ctx.contact.contactVertexIndices) {
+                if (idx >= 0 && idx < JOSH_CONFIG.smplVertexCount) mask[idx] = 1;
+              }
+            }
+            return mask;
+          })();
+
+          const initPose = ctx.smplInit !== null
+            ? ctx.smplInit.subarray(0, 72)
+            : undefined;
+          const initBetas = ctx.smplInit !== null
+            ? ctx.smplInit.subarray(72, 82)
+            : undefined;
+
+          const result = await runJOSHOptimizer({
+            smplModel: this._smplModel,
+            initPose: initPose ? new Float32Array(initPose) : undefined,
+            initBetas: initBetas ? new Float32Array(initBetas) : undefined,
+            pts3d: ctx.pointmap,
+            keypoints2d: kp2d,
+            depthMap: null,
+            contactMask: contactMaskArr,
+            focalLength: camera.fx,
+            cx: camera.cx,
+            cy: camera.cy,
+            imgW: ctx.frame.width,
+            imgH: ctx.frame.height,
+            onIter,
+          });
+
+          smplPose = result.pose;
+          smplShape = result.betas;
+          vertices = result.vertices;
+          jointPositions = result.joints;
+          losses = new Float32Array([result.finalLoss, 0, 0, 0, 0, 0]);
+
+          // Pack into joshParams for interpolation
+          ctx.joshParams = new Float32Array(JOSH_CONFIG.paramDim);
+          ctx.joshParams.set(smplPose, 0);
+          ctx.joshParams.set(smplShape, 72);
+          ctx.joshParams.set(result.transl, 82);
+          ctx.joshParams[85] = 1.0; // scale
+        } else {
+          // Fallback stub path (SMPL model not loaded)
+          ctx.joshParams = await stubJoshOptimize(
+            ctx, camera, totalIters, onIter, signal,
+          );
+          smplPose = ctx.joshParams.slice(0, 72);
+          smplShape = ctx.joshParams.slice(72, 82);
+          jointPositions = new Float32Array(JOSH_CONFIG.smplJointCount * 3);
+        }
+
+        const frameResult: PerFrameResult = {
           frameIndex: globalIdx,
           timestamp: ctx.frame.timestamp,
-          smplPose: ctx.joshParams.slice(0, 72),
-          smplShape: ctx.joshParams.slice(72, 82),
+          smplPose,
+          smplShape,
           cameraPose: new Float32Array(16),
           depthScale: 1.0,
-          vertices: null,
-          jointPositions: new Float32Array(JOSH_CONFIG.smplJointCount * 3),
-          losses: new Float32Array(6),
+          vertices: vertices ?? null,
+          jointPositions,
+          losses,
         };
-        await cache.storeFrame(result);
+        await cache.storeFrame(frameResult);
       }
 
       if (signal?.aborted) break;
