@@ -136,7 +136,7 @@ async function main() {
       statusEl.style.display = 'none';
     } catch {
       statusEl.textContent = 'Camera unavailable';
-      inputSelect.value = 'sample';
+      inputSelect.value = './assets/josh-demo.mp4';
       await switchToSample();
     }
   }
@@ -147,7 +147,7 @@ async function main() {
       cameraStream = null;
     }
     videoEl.srcObject = null;
-    videoEl.src = './assets/josh-demo.mp4';
+    videoEl.src = inputSelect.value;
     videoEl.loop = true;
     videoEl.muted = true;
     await videoEl.play().catch(() => {});
@@ -174,7 +174,7 @@ async function main() {
     statusEl.style.display = 'none';
     inputSelect.value = 'camera';
   } catch {
-    inputSelect.value = 'sample';
+    inputSelect.value = './assets/josh-demo.mp4';
     await switchToSample();
   }
 
