@@ -2,6 +2,7 @@ import { getGpuDevice } from '../src/backends/webgpu/device.ts';
 import { BufferManager } from '../src/core/buffer-manager.ts';
 import { ResourceTracker } from '../src/core/resource-tracker.ts';
 import type { NodeContext } from '../src/graph/node.ts';
+import { PROC_W, PROC_H, type DisplayPx, fitToAnchor } from '../src/core/dimensions.ts';
 
 /**
  * OpenCV.ts 5.0 — JOSH Live Demo Entry Point
@@ -206,24 +207,38 @@ async function main() {
   setTimeout(() => { loadingOverlay.style.display = 'none'; }, 600);
 
   // ─── Step 5: Render loop ───
-  const FRAME_W = 384;
-  const FRAME_H = 384;
+  // Internal processing resolution (GPU buffers are always PROC_W × PROC_H)
+  const FRAME_W = PROC_W as number;
+  const FRAME_H = PROC_H as number;
   const frameCanvas = document.createElement('canvas');
   frameCanvas.width = FRAME_W;
   frameCanvas.height = FRAME_H;
   const frameCtx2d = frameCanvas.getContext('2d', { willReadFrequently: true })!;
   const rgbFloat32 = new Float32Array(FRAME_H * FRAME_W * 3);
 
-  // Visualization canvases
+  // Visualization canvases — displayed at the video's native aspect ratio
   const depthCanvas = document.getElementById('depthCanvas') as HTMLCanvasElement;
   const meshCanvas = document.getElementById('meshCanvas') as HTMLCanvasElement;
   const outputCanvas = document.getElementById('outputCanvas') as HTMLCanvasElement;
-  depthCanvas.width = FRAME_W;
-  depthCanvas.height = FRAME_H;
-  meshCanvas.width = FRAME_W;
-  meshCanvas.height = FRAME_H;
-  outputCanvas.width = FRAME_W;
-  outputCanvas.height = FRAME_H;
+
+  // Mutable display dimensions (updated when video metadata loads)
+  let displayW: DisplayPx = FRAME_W as DisplayPx;
+  let displayH: DisplayPx = FRAME_H as DisplayPx;
+
+  function applyDisplaySize() {
+    const { w, h } = fitToAnchor(videoEl.videoWidth || FRAME_W, videoEl.videoHeight || FRAME_H, FRAME_H);
+    displayW = w;
+    displayH = h;
+    for (const c of [depthCanvas, meshCanvas, outputCanvas]) {
+      c.width = displayW as number;
+      c.height = displayH as number;
+    }
+  }
+
+  videoEl.addEventListener('loadedmetadata', applyDisplaySize);
+  // Apply immediately in case metadata is already available
+  if (videoEl.readyState >= HTMLMediaElement.HAVE_METADATA) applyDisplaySize();
+
   const depthCtx = depthCanvas.getContext('2d')!;
   const meshCtx = meshCanvas.getContext('2d')!;
   const outputCtx = outputCanvas.getContext('2d')!;
@@ -279,8 +294,22 @@ async function main() {
     w: number,
     h: number,
   ) {
-    // Draw video frame as background
-    ctx2d.drawImage(videoEl, 0, 0, w, h);
+    // Draw video frame as background — preserve video's native aspect ratio
+    const vW = videoEl.videoWidth || w;
+    const vH = videoEl.videoHeight || h;
+    const srcAR = vW / vH;
+    const dstAR = w / h;
+    let sx = 0, sy = 0, sw = vW, sh = vH;
+    if (Math.abs(srcAR - dstAR) > 0.01) {
+      if (srcAR > dstAR) {
+        sw = Math.round(vH * dstAR);
+        sx = Math.round((vW - sw) / 2);
+      } else {
+        sh = Math.round(vW / dstAR);
+        sy = Math.round((vH - sh) / 2);
+      }
+    }
+    ctx2d.drawImage(videoEl, sx, sy, sw, sh, 0, 0, w, h);
     ctx2d.fillStyle = 'rgba(0,0,0,0.5)';
     ctx2d.fillRect(0, 0, w, h);
 
@@ -357,12 +386,21 @@ async function main() {
   let lastTime = performance.now();
   let fps = 0;
 
+  // Reusable off-screen canvas for the 384×384 depth data (avoids allocation per frame)
+  const depthOffscreen = document.createElement('canvas');
+  depthOffscreen.width = FRAME_W;
+  depthOffscreen.height = FRAME_H;
+  const depthOffCtx = depthOffscreen.getContext('2d')!;
+
   function renderDepthToCanvas(
     depthData: Float32Array,
     ctx2d: CanvasRenderingContext2D,
-    w: number,
-    h: number,
+    dstW: number,
+    dstH: number,
   ) {
+    // depthData is always FRAME_W × FRAME_H (processing resolution)
+    // Render to offscreen 384×384 first, then scale-blit to the display canvas
+
     // Find min/max for normalization
     let min = Infinity;
     let max = -Infinity;
@@ -373,7 +411,7 @@ async function main() {
     }
     const range = max - min || 1;
 
-    const imgData = ctx2d.createImageData(w, h);
+    const imgData = depthOffCtx.createImageData(FRAME_W, FRAME_H);
     const px = imgData.data;
     for (let i = 0; i < depthData.length; i++) {
       const norm = (depthData[i]! - min) / range;
@@ -386,7 +424,23 @@ async function main() {
       px[i * 4 + 2] = b;
       px[i * 4 + 3] = 255;
     }
-    ctx2d.putImageData(imgData, 0, 0);
+    depthOffCtx.putImageData(imgData, 0, 0);
+
+    // Scale to display canvas (letterbox if aspect ratios differ)
+    const srcAR = FRAME_W / FRAME_H;
+    const dstAR = dstW / dstH;
+    let sx = 0, sy = 0, sw = FRAME_W, sh = FRAME_H;
+    if (Math.abs(srcAR - dstAR) > 0.01) {
+      // Letterbox: crop source to match destination AR
+      if (srcAR > dstAR) {
+        sw = Math.round(FRAME_H * dstAR);
+        sx = Math.round((FRAME_W - sw) / 2);
+      } else {
+        sh = Math.round(FRAME_W / dstAR);
+        sy = Math.round((FRAME_H - sh) / 2);
+      }
+    }
+    ctx2d.drawImage(depthOffscreen, sx, sy, sw, sh, 0, 0, dstW, dstH);
   }
 
   async function renderFrame() {
@@ -427,7 +481,7 @@ async function main() {
         // Node A: depth estimation output
         const depthBuf = await pipeline.readOutput(depthNodeId, 'depthMap');
         const depthArr = new Float32Array(depthBuf);
-        renderDepthToCanvas(depthArr, depthCtx, FRAME_W, FRAME_H);
+        renderDepthToCanvas(depthArr, depthCtx, displayW as number, displayH as number);
 
         // Debug depth range (first few frames only)
         if (frameCount <= 9) {
@@ -444,7 +498,7 @@ async function main() {
         // Node B: HMR skeleton overlay
         const jointsBuf = await pipeline.readOutput(hmrNodeId, 'jointPositions');
         const jointsArr = new Float32Array(jointsBuf);
-        renderSkeletonToCanvas(jointsArr, meshCtx, FRAME_W, FRAME_H);
+        renderSkeletonToCanvas(jointsArr, meshCtx, displayW as number, displayH as number);
 
         // Debug joints (first few frames)
         if (frameCount <= 9) {
@@ -455,7 +509,7 @@ async function main() {
 
         // Node C: solver optimized depth output
         const solverBuf = await pipeline.readOutput(solverNodeId, 'optimizedDepth');
-        renderDepthToCanvas(new Float32Array(solverBuf), outputCtx, FRAME_W, FRAME_H);
+        renderDepthToCanvas(new Float32Array(solverBuf), outputCtx, displayW as number, displayH as number);
       }
     } catch (e) {
       console.error('Frame execution error:', e);

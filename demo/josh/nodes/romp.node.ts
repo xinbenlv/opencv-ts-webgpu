@@ -425,8 +425,44 @@ export function overallConfidence(scores: number[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// Lazy tf.js pose-detection import
+// Lazy tf.js backend initialisation + pose-detection import
 // ---------------------------------------------------------------------------
+
+let _backendReady = false;
+
+/**
+ * Ensure tf.js has a usable backend before creating any detector.
+ * Tries WebGL first (GPU-accelerated), falls back to CPU.
+ */
+async function ensureTfBackend(): Promise<void> {
+  if (_backendReady) return;
+  try {
+    const tf = await import('@tensorflow/tfjs-core');
+    // Import backends so they register themselves
+    await import('@tensorflow/tfjs-backend-webgl');
+    const current = tf.getBackend();
+    if (!current || current === '') {
+      await tf.setBackend('webgl');
+    }
+    await tf.ready();
+    console.log('[ROMPNode] tf.js backend ready:', tf.getBackend());
+    _backendReady = true;
+  } catch (e) {
+    console.warn('[ROMPNode] WebGL backend failed, trying CPU fallback:', e);
+    try {
+      const tf = await import('@tensorflow/tfjs-core');
+      await import('@tensorflow/tfjs-backend-cpu');
+      await tf.setBackend('cpu');
+      await tf.ready();
+      console.log('[ROMPNode] tf.js CPU backend ready');
+      _backendReady = true;
+    } catch (e2) {
+      console.warn('[ROMPNode] tf.js backend init failed entirely:', e2);
+      // Proceed anyway — createDetector may still work if a backend was
+      // registered elsewhere (e.g. via a bundled tfjs import).
+    }
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type PoseDetectionModule = any;
@@ -473,6 +509,7 @@ export class ROMPNode {
 
     this._loading = true;
     try {
+      await ensureTfBackend();
       const pd = await getPoseDetection();
       if (!pd) {
         // Package not installed — treat as a soft failure; estimate() will
@@ -531,7 +568,10 @@ export class ROMPNode {
       return null;
     }
 
-    if (!poses || poses.length === 0) return null;
+    if (!poses || poses.length === 0) {
+      console.debug('[ROMPNode] no poses detected');
+      return null;
+    }
 
     const pose3D = poses[0]?.keypoints3D ?? poses[0]?.keypoints;
     if (!pose3D || pose3D.length < 29) return null;
@@ -561,7 +601,12 @@ export class ROMPNode {
     const jointMap = mapBlazePoseToSMPL(landmarks);
     const conf = overallConfidence(jointMap.scores);
 
-    if (conf < 0.2) return null;
+    console.debug(`[ROMPNode] detected ${landmarks.length} landmarks, confidence=${conf.toFixed(3)}`);
+
+    if (conf < 0.2) {
+      console.debug('[ROMPNode] confidence too low, skipping');
+      return null;
+    }
 
     const pose = computePoseAxisAngles(jointMap);
 
