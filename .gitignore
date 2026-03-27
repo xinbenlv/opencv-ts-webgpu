@@ -12,3 +12,8 @@ src/backends/wasm/pkg/
 demo/assets/ort/
 demo/public/
 .claude/worktrees/
+
+# SMPL model files — license requires individual download from smpl.is.tue.mpg.de
+demo/smpl/*.pkl
+demo/smpl/*.npz
+public/models/*.onnx
