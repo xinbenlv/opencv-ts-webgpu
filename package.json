@@ -1,6 +1,6 @@
 {
   "name": "opencv-ts-webgpu",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "description": "OpenCV.ts 5.0 — TypeScript-first, WebGPU-native Computer Vision framework",
   "type": "module",
   "license": "Apache-2.0",
