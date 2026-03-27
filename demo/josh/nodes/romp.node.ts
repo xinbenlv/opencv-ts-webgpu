@@ -202,7 +202,10 @@ interface BPLandmark {
 function lmPos(lms: BPLandmark[], idx: number): Vec3 {
   const lm = lms[idx];
   if (!lm) return [0, 0, 0];
-  return [lm.x, lm.y, lm.z ?? 0];
+  // BlazePose image-space: y=0 at top, y=1 at bottom.
+  // SMPL world-space:      y=0 at feet, y increases upward.
+  // Flip Y so bone directions match the world-up convention before computing axis-angles.
+  return [lm.x, 1.0 - lm.y, lm.z ?? 0];
 }
 
 function lmScore(lms: BPLandmark[], idx: number): number {

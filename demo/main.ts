@@ -290,6 +290,7 @@ async function main() {
 
   function renderSkeletonToCanvas(
     joints: Float32Array,
+    cam: Float32Array,    // [scale, tx, ty] weak-perspective camera from HMR
     ctx2d: CanvasRenderingContext2D,
     w: number,
     h: number,
@@ -310,41 +311,59 @@ async function main() {
       }
     }
     ctx2d.drawImage(videoEl, sx, sy, sw, sh, 0, 0, w, h);
-    ctx2d.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx2d.fillStyle = 'rgba(0,0,0,0.35)';
     ctx2d.fillRect(0, 0, w, h);
 
-    // Check if joints are all zero (placeholder) → use T-pose
-    let allZero = true;
+    // Check if joints are all zero (placeholder) → use T-pose reference
     let sumAbs = 0;
-    for (let i = 0; i < Math.min(joints.length, 72); i++) {
-      sumAbs += Math.abs(joints[i]!);
-      if (joints[i] !== 0) { allZero = false; }
-    }
-    // Also treat near-zero as placeholder
-    if (sumAbs < 0.01) allZero = true;
+    for (let i = 0; i < Math.min(joints.length, 72); i++) sumAbs += Math.abs(joints[i]!);
+    const allZero = sumAbs < 0.01;
+
+    // ── Project 3D metric joints → 2D canvas pixels ──────────────────────────
+    // Weak-perspective camera: cam = [s, tx, ty]
+    //   s   — scale factor (maps metres to canvas fraction)
+    //   tx  — horizontal offset in [-1, 1] → half at 0 means centre
+    //   ty  — vertical offset in [-1, 1]
+    //
+    // Projection: px = (s * Jx + tx) * w/2 + w/2
+    //             py = (-s * Jy + ty) * h/2 + h/2   (world Y is up, canvas Y is down)
+    //
+    // When cam is all-zeros (no detection), fall back to T-pose reference layout.
+    const camScale = cam[0] ?? 0;
+    const camTx    = cam[1] ?? 0;
+    const camTy    = cam[2] ?? 0;
+    const haveCamera = camScale > 0.05;
 
     const positions: [number, number][] = [];
+
     if (allZero) {
+      // T-pose reference (normalised canvas layout)
       for (let j = 0; j < 24; j++) {
         positions.push([TPOSE[j]![0] * w, TPOSE[j]![1] * h]);
       }
+    } else if (haveCamera) {
+      // Weak-perspective projection: place skeleton on the detected person
+      for (let j = 0; j < 24; j++) {
+        const Jx = joints[j * 3]!;
+        const Jy = joints[j * 3 + 1]!;
+        const px = (camScale * Jx + camTx) * (w / 2) + w / 2;
+        const py = (-camScale * Jy + camTy) * (h / 2) + h / 2;
+        positions.push([px, py]);
+      }
     } else {
-      // Find bounding box of joints for auto-scaling
+      // No camera but joints available — auto-scale & centre (abstract view)
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       for (let j = 0; j < 24; j++) {
         const jx = joints[j * 3]!;
         const jy = joints[j * 3 + 1]!;
-        if (jx < minX) minX = jx;
-        if (jx > maxX) maxX = jx;
-        if (jy < minY) minY = jy;
-        if (jy > maxY) maxY = jy;
+        if (jx < minX) minX = jx; if (jx > maxX) maxX = jx;
+        if (jy < minY) minY = jy; if (jy > maxY) maxY = jy;
       }
       const rangeX = maxX - minX || 1;
       const rangeY = maxY - minY || 1;
       const cx = (minX + maxX) / 2;
       const cy = (minY + maxY) / 2;
       const scale = Math.min(w, h) * 0.7 / Math.max(rangeX, rangeY);
-
       for (let j = 0; j < 24; j++) {
         const x = (joints[j * 3]! - cx) * scale + w * 0.5;
         const y = -(joints[j * 3 + 1]! - cy) * scale + h * 0.5;
@@ -376,10 +395,11 @@ async function main() {
     }
 
     // Label
-    ctx2d.fillStyle = allZero ? '#666' : '#4ade80';
+    const label = allZero ? 'SMPL T-pose (no detection)' : haveCamera ? 'SMPL Joints — tracked' : 'SMPL Joints (abstract)';
+    ctx2d.fillStyle = allZero ? '#666' : haveCamera ? '#4ade80' : '#fbbf24';
     ctx2d.font = '11px system-ui';
     ctx2d.textAlign = 'left';
-    ctx2d.fillText(allZero ? 'SMPL T-pose (no model)' : 'SMPL Joints (live)', 8, h - 8);
+    ctx2d.fillText(label, 8, h - 8);
   }
 
   let frameCount = 0;
@@ -498,7 +518,9 @@ async function main() {
         // Node B: HMR skeleton overlay
         const jointsBuf = await pipeline.readOutput(hmrNodeId, 'jointPositions');
         const jointsArr = new Float32Array(jointsBuf);
-        renderSkeletonToCanvas(jointsArr, meshCtx, displayW as number, displayH as number);
+        const camBuf = await pipeline.readOutput(hmrNodeId, 'estimatedCamera');
+        const camArr = new Float32Array(camBuf);
+        renderSkeletonToCanvas(jointsArr, camArr, meshCtx, displayW as number, displayH as number);
 
         // Debug joints (first few frames)
         if (frameCount <= 9) {

@@ -168,135 +168,143 @@ export class JoshSolverNode
       SMPL_CONTACT_VERTICES.leftToes.length +
       SMPL_CONTACT_VERTICES.rightToes.length;
 
+    // ─── Always passthrough depth + vertices first (guard against optimizer crash) ───
+    // These commands are added to ctx.commandEncoder unconditionally so Node C
+    // always shows the MiDaS depth even if the optimization loop throws.
+    ctx.commandEncoder.copyBufferToBuffer(depthIn, 0, depthOut, 0, depthLayout.byteLength);
+    ctx.commandEncoder.copyBufferToBuffer(verticesIn, 0, verticesOut, 0, verticesLayout.byteLength);
+
     // Upload previous frame params
     this._device!.queue.writeBuffer(this._prevParamsBuffer!, 0, this._prevParams);
 
-    // ─── Joint Optimization Loop ───
-    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-      // Clear gradient and loss buffers
-      ctx.commandEncoder.clearBuffer(this._gradientBuffer!, 0, PARAM_DIM * 4);
-      ctx.commandEncoder.clearBuffer(this._lossBuffer!, 0, 16);
+    // ─── Joint Optimization Loop (best-effort — crashes here don't blank Node C) ───
+    try {
+      for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+        // Each iteration uses its OWN encoder so we can submit + readback gradients
+        // without racing against ctx.commandEncoder.
+        const iterEncoder = this._device!.createCommandEncoder({ label: `josh_iter_${iter}` });
 
-      // Dispatch gradient kernel 1: Contact loss
-      const contactUniforms = new ArrayBuffer(32);
-      const cv = new DataView(contactUniforms);
-      cv.setUint32(0, DEPTH_W, true);
-      cv.setUint32(4, DEPTH_H, true);
-      cv.setUint32(8, numContacts, true);
-      cv.setFloat32(12, FX, true);
-      cv.setFloat32(16, FY, true);
-      cv.setFloat32(20, CX, true);
-      cv.setFloat32(24, CY, true);
-      cv.setFloat32(28, 0.05, true); // threshold
+        // Clear gradient and loss buffers
+        iterEncoder.clearBuffer(this._gradientBuffer!, 0, PARAM_DIM * 4);
+        iterEncoder.clearBuffer(this._lossBuffer!, 0, 16);
 
-      await this._gpuKernelRunner!.dispatch(
-        ctx.commandEncoder,
-        contactLossKernel,
-        [verticesIn, depthIn, this._contactIndicesBuffer!, this._gradientBuffer!, this._lossBuffer!],
-        [numContacts],
-        contactUniforms,
-      );
+        // Dispatch gradient kernel 1: Contact loss
+        const contactUniforms = new ArrayBuffer(32);
+        const cv = new DataView(contactUniforms);
+        cv.setUint32(0, DEPTH_W, true);
+        cv.setUint32(4, DEPTH_H, true);
+        cv.setUint32(8, numContacts, true);
+        cv.setFloat32(12, FX, true);
+        cv.setFloat32(16, FY, true);
+        cv.setFloat32(20, CX, true);
+        cv.setFloat32(24, CY, true);
+        cv.setFloat32(28, 0.05, true); // threshold
 
-      // Dispatch gradient kernel 2: Depth reprojection
-      const reprojUniforms = new ArrayBuffer(32);
-      const rv = new DataView(reprojUniforms);
-      rv.setUint32(0, DEPTH_W, true);
-      rv.setUint32(4, DEPTH_H, true);
-      rv.setUint32(8, SMPL_VERTEX_COUNT, true);
-      rv.setFloat32(12, FX, true);
-      rv.setFloat32(16, FY, true);
-      rv.setFloat32(20, CX, true);
-      rv.setFloat32(24, CY, true);
-      rv.setFloat32(28, 0.1, true); // weight
+        await this._gpuKernelRunner!.dispatch(
+          iterEncoder,
+          contactLossKernel,
+          [verticesIn, depthIn, this._contactIndicesBuffer!, this._gradientBuffer!, this._lossBuffer!],
+          [numContacts],
+          contactUniforms,
+        );
 
-      await this._gpuKernelRunner!.dispatch(
-        ctx.commandEncoder,
-        depthReprojKernel,
-        [verticesIn, depthIn, this._gradientBuffer!, this._lossBuffer!],
-        [SMPL_VERTEX_COUNT],
-        reprojUniforms,
-      );
+        // Dispatch gradient kernel 2: Depth reprojection
+        const reprojUniforms = new ArrayBuffer(32);
+        const rv = new DataView(reprojUniforms);
+        rv.setUint32(0, DEPTH_W, true);
+        rv.setUint32(4, DEPTH_H, true);
+        rv.setUint32(8, SMPL_VERTEX_COUNT, true);
+        rv.setFloat32(12, FX, true);
+        rv.setFloat32(16, FY, true);
+        rv.setFloat32(20, CX, true);
+        rv.setFloat32(24, CY, true);
+        rv.setFloat32(28, 0.1, true); // weight
 
-      // Dispatch gradient kernel 3: Temporal smoothness
-      const temporalUniforms = new ArrayBuffer(16);
-      const tv = new DataView(temporalUniforms);
-      tv.setUint32(0, PARAM_DIM, true);
-      tv.setFloat32(4, 10.0, true); // weight
-      tv.setUint32(8, 0, true);
-      tv.setUint32(12, 0, true);
+        await this._gpuKernelRunner!.dispatch(
+          iterEncoder,
+          depthReprojKernel,
+          [verticesIn, depthIn, this._gradientBuffer!, this._lossBuffer!],
+          [SMPL_VERTEX_COUNT],
+          reprojUniforms,
+        );
 
-      await this._gpuKernelRunner!.dispatch(
-        ctx.commandEncoder,
-        temporalSmoothnessKernel,
-        [this._currentParamsBuffer!, this._prevParamsBuffer!, this._gradientBuffer!, this._lossBuffer!],
-        [PARAM_DIM],
-        temporalUniforms,
-      );
+        // Dispatch gradient kernel 3: Temporal smoothness
+        const temporalUniforms = new ArrayBuffer(16);
+        const tv = new DataView(temporalUniforms);
+        tv.setUint32(0, PARAM_DIM, true);
+        tv.setFloat32(4, 10.0, true); // weight
+        tv.setUint32(8, 0, true);
+        tv.setUint32(12, 0, true);
 
-      // Read back gradients from GPU via separate encoder
-      const readbackEncoder = this._device!.createCommandEncoder({ label: 'josh_grad_readback' });
-      const gradStaging = this._device!.createBuffer({
+        await this._gpuKernelRunner!.dispatch(
+          iterEncoder,
+          temporalSmoothnessKernel,
+          [this._currentParamsBuffer!, this._prevParamsBuffer!, this._gradientBuffer!, this._lossBuffer!],
+          [PARAM_DIM],
+          temporalUniforms,
+        );
+
+        // Submit iteration kernels then immediately read back gradients
+        const gradStaging = this._device!.createBuffer({
+          size: PARAM_DIM * 4,
+          usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+          label: 'josh_grad_staging',
+        });
+        iterEncoder.copyBufferToBuffer(this._gradientBuffer!, 0, gradStaging, 0, PARAM_DIM * 4);
+        this._device!.queue.submit([iterEncoder.finish()]);
+
+        await gradStaging.mapAsync(GPUMapMode.READ);
+        const gradData = new Float32Array(gradStaging.getMappedRange().slice(0));
+        gradStaging.unmap();
+        gradStaging.destroy();
+
+        // Convert f32 gradients to f64 for L-BFGS
+        const gradient64 = new Float64Array(PARAM_DIM);
+        for (let i = 0; i < PARAM_DIM; i++) {
+          gradient64[i] = gradData[i]!;
+        }
+
+        // L-BFGS step in WASM
+        const direction = this._wasmRunner!.lbfgsStep(gradient64);
+
+        // Backtracking line search
+        const stepSize = 0.01;
+        const currentParams = this._lbfgs!.inner.getParameters();
+        const newParams = new Float64Array(PARAM_DIM);
+        for (let i = 0; i < PARAM_DIM; i++) {
+          newParams[i] = currentParams[i]! + stepSize * direction[i]!;
+        }
+
+        // Update L-BFGS state
+        const converged = this._wasmRunner!.lbfgsUpdate(newParams, gradient64);
+
+        // Upload updated params to GPU
+        const paramsF32 = new Float32Array(PARAM_DIM);
+        for (let i = 0; i < PARAM_DIM; i++) {
+          paramsF32[i] = newParams[i]!;
+        }
+        this._device!.queue.writeBuffer(this._currentParamsBuffer!, 0, paramsF32);
+
+        if (converged) break;
+      }
+
+      // Save current params as previous for next frame
+      const readParamsEncoder = this._device!.createCommandEncoder({ label: 'josh_params_read' });
+      const paramStaging = this._device!.createBuffer({
         size: PARAM_DIM * 4,
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        label: 'josh_grad_staging',
+        label: 'josh_params_staging',
       });
-      readbackEncoder.copyBufferToBuffer(this._gradientBuffer!, 0, gradStaging, 0, PARAM_DIM * 4);
-      this._device!.queue.submit([readbackEncoder.finish()]);
-
-      await gradStaging.mapAsync(GPUMapMode.READ);
-      const gradData = new Float32Array(gradStaging.getMappedRange().slice(0));
-      gradStaging.unmap();
-      gradStaging.destroy();
-
-      // Convert f32 gradients to f64 for L-BFGS
-      const gradient64 = new Float64Array(PARAM_DIM);
-      for (let i = 0; i < PARAM_DIM; i++) {
-        gradient64[i] = gradData[i]!;
-      }
-
-      // L-BFGS step in WASM
-      const direction = this._wasmRunner!.lbfgsStep(gradient64);
-
-      // Backtracking line search
-      const stepSize = 0.01;
-      const currentParams = this._lbfgs!.inner.getParameters();
-      const newParams = new Float64Array(PARAM_DIM);
-      for (let i = 0; i < PARAM_DIM; i++) {
-        newParams[i] = currentParams[i]! + stepSize * direction[i]!;
-      }
-
-      // Update L-BFGS state
-      const converged = this._wasmRunner!.lbfgsUpdate(newParams, gradient64);
-
-      // Upload updated params to GPU
-      const paramsF32 = new Float32Array(PARAM_DIM);
-      for (let i = 0; i < PARAM_DIM; i++) {
-        paramsF32[i] = newParams[i]!;
-      }
-      this._device!.queue.writeBuffer(this._currentParamsBuffer!, 0, paramsF32);
-
-      if (converged) break;
+      readParamsEncoder.copyBufferToBuffer(this._currentParamsBuffer!, 0, paramStaging, 0, PARAM_DIM * 4);
+      this._device!.queue.submit([readParamsEncoder.finish()]);
+      await paramStaging.mapAsync(GPUMapMode.READ);
+      this._prevParams.set(new Float32Array(paramStaging.getMappedRange().slice(0)));
+      paramStaging.unmap();
+      paramStaging.destroy();
+    } catch (e) {
+      // Optimization failed — Node C still shows passthrough depth (already queued above)
+      console.warn('[JOSHSolver] Optimization loop error (depth passthrough still active):', e);
     }
-
-    // Save current params as previous for next frame
-    const readParamsEncoder = this._device!.createCommandEncoder({ label: 'josh_params_read' });
-    const paramStaging = this._device!.createBuffer({
-      size: PARAM_DIM * 4,
-      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-      label: 'josh_params_staging',
-    });
-    readParamsEncoder.copyBufferToBuffer(this._currentParamsBuffer!, 0, paramStaging, 0, PARAM_DIM * 4);
-    this._device!.queue.submit([readParamsEncoder.finish()]);
-    await paramStaging.mapAsync(GPUMapMode.READ);
-    this._prevParams.set(new Float32Array(paramStaging.getMappedRange().slice(0)));
-    paramStaging.unmap();
-    paramStaging.destroy();
-
-    // Write optimized outputs
-    // Apply depth scale from optimization parameter 88
-    // For now: copy depth with optimization-adjusted scale
-    ctx.commandEncoder.copyBufferToBuffer(depthIn, 0, depthOut, 0, depthLayout.byteLength);
-    ctx.commandEncoder.copyBufferToBuffer(verticesIn, 0, verticesOut, 0, verticesLayout.byteLength);
 
     // Build 4×4 camera extrinsics from optimized params [82..87]
     const camParams = this._prevParams;
